@@ -26,6 +26,7 @@ namespace romm::model {
             GameDetail detail;
             std::string platform_slug;
             std::string title;
+            SyncOptions options;
         };
 
         std::string StripExtension(const std::string& filename) {
@@ -56,7 +57,7 @@ namespace romm::model {
 
     void* SyncManager::SyncTrampoline(void* arg) {
         std::unique_ptr<SyncJob> job(static_cast<SyncJob*>(arg));
-        SyncManager::Instance().Worker(job->detail, job->platform_slug, job->title);
+        SyncManager::Instance().Worker(job->detail, job->platform_slug, job->title, job->options);
         return nullptr;
     }
 
@@ -99,6 +100,21 @@ namespace romm::model {
             return "";
         }
         return std::to_string(st.st_size) + "-" + ShortHash(path);
+    }
+
+    bool SyncManager::IsCompressedArchive(const std::string& filename) {
+        size_t dot = filename.find_last_of('.');
+        if (dot == std::string::npos) return false;
+        std::string ext;
+        for (size_t i = dot; i < filename.size(); ++i) {
+            ext.push_back((char)std::tolower((unsigned char)filename[i]));
+        }
+        static const char* kArchives[] = {".7z", ".zip", ".rar", ".gz", ".gzip",
+                                          ".tar", ".bz2", ".xz", ".zst", ".lz4"};
+        for (const char* a : kArchives) {
+            if (ext == a) return true;
+        }
+        return false;
     }
 
     void SyncManager::LoadSyncState() {
@@ -182,7 +198,8 @@ namespace romm::model {
 
     void SyncManager::StartSync(const GameDetail& detail,
                                 const std::string& platform_slug,
-                                const std::string& title) {
+                                const std::string& title,
+                                const SyncOptions& options) {
         if (worker_running_.load()) {
             std::cout << "[SYNC] Already running, ignoring StartSync for rom_id="
                       << detail.rom_id << std::endl;
@@ -203,6 +220,7 @@ namespace romm::model {
         job->detail = detail;
         job->platform_slug = platform_slug;
         job->title = title;
+        job->options = options;
 
         worker_running_ = true;
 
@@ -317,6 +335,16 @@ namespace romm::model {
         ScreenWakeManager::Instance().RequestUpdate();
     }
 
+    void SyncManager::SetWarning(const std::string& warning) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (snapshot_.warning != warning) {
+                snapshot_.warning = warning;
+            }
+        }
+        ScreenWakeManager::Instance().RequestUpdate();
+    }
+
     int SyncManager::StageIndex(SyncStage stage) const {
         for (size_t i = 0; i < snapshot_.stages.size(); ++i) {
             if (snapshot_.stages[i].stage == stage) return (int)i;
@@ -418,7 +446,7 @@ namespace romm::model {
     // Full per-save decision flow (decision table in the PRD, section 5.5).
     // The worker runs this after resolving the save target path.
     void SyncManager::RunSavesStage(int rom_id, const std::string& tico_slug,
-                                    const std::string& target) {
+                                    const std::string& target, const SyncOptions& options) {
         std::string core = ResolveTicoCore(tico_slug);
         if (core.empty()) {
             SetStage(SyncStage::Saves, SyncStageState::Unsupported,
@@ -472,6 +500,27 @@ namespace romm::model {
         const bool server_changed = server_save &&
             (entry.server_save_updated_at.empty() || server_save->updated_at != entry.server_save_updated_at);
         const bool local_changed = local_exists && local_fp != entry.save_local_fingerprint;
+
+        // Force overrides: the user explicitly asked for a direction, so the
+        // skip/conflict logic is bypassed entirely.
+        if (options.force_save_upload) {
+            if (local_exists) {
+                RunSaveUpload(target, rom_id, tico_slug, core, entry.rom_path, entry.rom_size);
+            } else {
+                SetStage(SyncStage::Saves, SyncStageState::Skipped,
+                         romm::i18n::tr("sync.saves.no_local"));
+            }
+            return;
+        }
+        if (options.force_save_download) {
+            if (server_save) {
+                RunSaveDownload(*server_save, target, rom_id, tico_slug, entry.rom_path, entry.rom_size);
+            } else {
+                SetStage(SyncStage::Saves, SyncStageState::Skipped,
+                         romm::i18n::tr("sync.saves.no_server"));
+            }
+            return;
+        }
 
         enum class SaveAction { Download, Upload, Skip, Prompt };
         SaveAction action = SaveAction::Skip;
@@ -564,7 +613,7 @@ namespace romm::model {
     }
 
     void SyncManager::Worker(const GameDetail& detail, const std::string& platform_slug,
-                             const std::string& title) {
+                             const std::string& title, const SyncOptions& options) {
         struct stat st;
 
         // Initialize the snapshot the modal will render.
@@ -626,6 +675,14 @@ namespace romm::model {
                                         ResolveTicoSaveExtension(tico_slug);
         const std::string cover_target = config.GetTicoCoverPath(platform_slug) + rom_base + ".jpg";
 
+        // Tico cannot run compressed archives (7z, zip, ...) — warn the user
+        // to extract the ROM (e.g. with DBI) before expecting it to launch.
+        if (SyncManager::IsCompressedArchive(rom_name)) {
+            size_t dot = rom_name.find_last_of('.');
+            std::string ext = (dot != std::string::npos) ? rom_name.substr(dot) : "";
+            SetWarning(romm::i18n::format("sync.warning.compressed", {{"ext", ext}}));
+        }
+
         // --- Stage 1: ROM -------------------------------------------------
         SetStage(SyncStage::Rom, SyncStageState::Running, romm::i18n::tr("sync.rom.downloading"));
 
@@ -659,7 +716,8 @@ namespace romm::model {
             rom_present_size = (long long)st.st_size;
         }
 
-        if (rom_present && rom_present_size == file.file_size_bytes) {
+        // Same-size ROMs are normally skipped; "force ROM" re-downloads them.
+        if (!options.force_rom && rom_present && rom_present_size == file.file_size_bytes) {
             SetStage(SyncStage::Rom, SyncStageState::Skipped,
                      romm::i18n::format("sync.rom.already", {{"path", rom_path}}));
         } else {
@@ -708,7 +766,7 @@ namespace romm::model {
         SaveSyncState();
 
         // --- Stage 2: Saves ----------------------------------------------
-        RunSavesStage(detail.rom_id, tico_slug, save_target);
+        RunSavesStage(detail.rom_id, tico_slug, save_target, options);
         if (cancel_requested_.load()) {
             Finish();
             return;
@@ -745,7 +803,7 @@ namespace romm::model {
                 cover_present_size = (long long)st.st_size;
             }
 
-            if (cover_present && cover_present_size == prev_cover_size) {
+            if (cover_present && !options.force_cover && cover_present_size == prev_cover_size) {
                 SetStage(SyncStage::Cover, SyncStageState::Skipped,
                          romm::i18n::format("sync.cover.already", {{"path", cover_target}}));
             } else {

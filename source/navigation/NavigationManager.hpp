@@ -20,6 +20,13 @@ namespace romm::ui {
 
 namespace romm::navigation {
 
+    // The sync modal opens in Options mode (force toggles + start) and moves
+    // to Progress once the worker is running.
+    enum class SyncModalMode {
+        Options,
+        Progress
+    };
+
     enum class Screen {
         MainMenu,
         Library,
@@ -123,9 +130,15 @@ namespace romm::navigation {
         bool library_menu_active = false;
         size_t library_menu_selected_idx = 0;  // 0=Search, 1=Sort, 2=View Mode
 
-        // Sync modal overlay (progress + conflict prompt).
+        // Sync modal overlay (options pre-flight + progress + conflict prompt).
         bool sync_modal_active = false;
+        SyncModalMode sync_modal_mode = SyncModalMode::Progress;
         size_t sync_conflict_selected_idx = 0;
+        // Pre-flight options: selected row, toggles, save direction radio.
+        size_t sync_option_idx = 0;
+        bool sync_opt_force_rom = false;
+        bool sync_opt_force_cover = false;
+        size_t sync_opt_save_dir = 0;
 
         // Persistent layouts created once
         std::shared_ptr<romm::ui::MainMenuLayout> main_menu_layout;
@@ -219,12 +232,23 @@ namespace romm::navigation {
         void HandleUninstallModalInput(u64 keys_down);
 
         // Sync modal controls. The modal is a view over SyncManager's snapshot;
-        // closing it only hides the UI, the worker keeps running.
+        // closing it only hides the UI, the worker keeps running. The modal
+        // starts in Options mode so the user can force re-downloads/uploads
+        // before the sync runs.
         bool IsSyncModalActive() const { return sync_modal_active; }
         void ShowSyncModal() { sync_modal_active = true; sync_conflict_selected_idx = 0; }
         void HideSyncModal() { sync_modal_active = false; }
+        SyncModalMode GetSyncModalMode() const { return sync_modal_mode; }
+        void SetSyncModalMode(SyncModalMode mode) { sync_modal_mode = mode; }
         size_t GetSyncConflictSelectedIdx() const { return sync_conflict_selected_idx; }
         void HandleSyncModalInput(u64 keys_down);
+
+        // Force/option state of the sync pre-flight screen.
+        size_t GetSyncOptionIdx() const { return sync_option_idx; }
+        bool GetSyncOptionForceRom() const { return sync_opt_force_rom; }
+        bool GetSyncOptionForceCover() const { return sync_opt_force_cover; }
+        size_t GetSyncOptionSaveDir() const { return sync_opt_save_dir; } // 0=auto, 1=upload, 2=download
+        void SetSyncOptionIdx(size_t idx) { sync_option_idx = idx; }
 
         // Library Y-Menu controls
         bool IsLibraryMenuActive() const { return library_menu_active; }

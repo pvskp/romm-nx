@@ -680,14 +680,12 @@ namespace romm::ui {
         s32 btn_x = cover_x; // 190
 
         bool actions_focused = (nav->GetDetailFocus() == romm::navigation::DetailFocus::Actions);
-        const size_t selected_action_idx = nav->GetSelectedDetailActionIdx();
 
         pu::ui::Color btn_bg(16, 18, 22, 255); // Web Dark Slate (#101216)
         pu::ui::Color btn_border;
         s32 btn_border_w = 0;
 
-        bool download_focused = actions_focused && selected_action_idx == 0;
-        if (download_focused) {
+        if (actions_focused) {
             btn_border = pu::ui::Color(230, 199, 167, 255); // Cream (#E6C7A7)
             btn_border_w = 4;
         } else {
@@ -698,159 +696,12 @@ namespace romm::ui {
         drawer->RenderRoundedRectangleFill(btn_border, btn_x, btn_y, btn_w, btn_h, 8);
         drawer->RenderRoundedRectangleFill(btn_bg, btn_x + btn_border_w, btn_y + btn_border_w, btn_w - (btn_border_w * 2), btn_h - (btn_border_w * 2), 6);
 
-        pu::sdl2::Texture active_btn_tex = tex_btn_download;
-        bool draw_progress_bar = false;
-        float progress_pct = 0.0f;
-        std::string new_dynamic_text = "";
-
-        int rom_id = ctx.rom_id;
-        auto model = nav->GetModel();
-
-        if (rom_id > 0 && model) {
-            auto& dl_mgr = romm::model::DownloadManager::Instance();
-            auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
-            auto active_snap = dl_mgr.GetActiveDownloadSnapshot();
-            std::string platform_slug = ctx.platform_slug;
-
-            if (rom_id != checked_rom_id) {
-                checked_rom_id = rom_id;
-                file_exists_checked = false;
-                final_file_exists = false;
-                part_file_exists = false;
-                const auto* detail_pre = model->GetCachedDetail(rom_id);
-                if (detail_pre) {
-                    // Multi-disc games are identified on disk by their root .m3u, not
-                    // the top-level fs_name (a folder) — resolve the right check name.
-                    std::string check_name = dl_mgr.InstallIdentityFilename(
-                        platform_slug, detail_pre->files, detail_pre->file_name);
-                    if (!check_name.empty()) {
-                        dl_mgr.RefreshInstallCache(platform_slug, check_name);
-                    }
-                }
-            }
-
-            {
-                const auto* detail = model->GetCachedDetail(rom_id);
-                std::string check_name;
-                if (detail) {
-                    check_name = dl_mgr.InstallIdentityFilename(
-                        platform_slug, detail->files, detail->file_name);
-                }
-                if (!check_name.empty()) {
-                    final_file_exists = dl_mgr.GetCachedInstallState(platform_slug, check_name);
-                } else {
-                    final_file_exists = false;
-                }
-            }
-
-            current_action_state = ComputeDownloadActionState(rom_id, platform_slug, model->GetCachedDetail(rom_id));
-
-            if (current_action_state == DownloadActionState::Uninstall) {
-                active_btn_tex = tex_btn_uninstall;
-            } else if (current_action_state == DownloadActionState::Downloading) {
-                if (task_snap.state == romm::model::DownloadState::DownloadingGame) {
-                    draw_progress_bar = true;
-                    long long down = task_snap.downloaded_bytes;
-                    long long total = task_snap.total_bytes;
-                    if (total > 0) {
-                        progress_pct = (float)down / total;
-                        int pct_int = (int)(progress_pct * 100);
-                        new_dynamic_text = romm::i18n::format("detail.btn.downloading_percent",
-                                                              {{"percent", std::to_string(pct_int)}});
-                    } else {
-                        new_dynamic_text = romm::i18n::tr("detail.btn.downloading");
-                    }
-                } else if (task_snap.state == romm::model::DownloadState::DownloadingCover) {
-                    new_dynamic_text = romm::i18n::tr("detail.btn.downloading_cover");
-                } else if (task_snap.state == romm::model::DownloadState::SyncingCover) {
-                    new_dynamic_text = romm::i18n::tr("detail.btn.syncing_cover");
-                } else {
-                    active_btn_tex = tex_btn_preparing;
-                }
-            } else if (current_action_state == DownloadActionState::Queued) {
-                auto queue = dl_mgr.GetQueueSnapshot();
-                int q_pos = 0;
-                for (const auto& t : queue) {
-                    if (t.state == romm::model::DownloadState::Queued) q_pos++;
-                    if (t.rom_id == rom_id) break;
-                }
-                new_dynamic_text = romm::i18n::format("detail.btn.queued", {{"position", std::to_string(q_pos)}});
-            } else if (current_action_state == DownloadActionState::Failed) {
-                active_btn_tex = tex_btn_failed;
-            } else if (current_action_state == DownloadActionState::AddToQueue) {
-                active_btn_tex = tex_btn_add_to_queue;
-            } else {
-                active_btn_tex = tex_btn_download;
-            }
-
-            if (!new_dynamic_text.empty()) {
-                if (current_dynamic_text != new_dynamic_text || dynamic_download_tex == nullptr) {
-                    if (dynamic_download_tex) {
-                        pu::ui::render::DeleteTexture(dynamic_download_tex);
-                    }
-                    pu::ui::Color text_color(237, 229, 251, 255);
-                    dynamic_download_tex = pu::ui::render::RenderText("Orbitron@30", new_dynamic_text, text_color);
-                    current_dynamic_text = new_dynamic_text;
-                }
-                active_btn_tex = dynamic_download_tex;
-            }
-        }
-
-        if (active_btn_tex) {
-            s32 tw = pu::ui::render::GetTextureWidth(active_btn_tex);
-            s32 th = pu::ui::render::GetTextureHeight(active_btn_tex);
-            drawer->RenderTexture(active_btn_tex, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
-        }
-
-        // Sync button, to the right of the download action.
-        {
-            const s32 sync_gap = 20;
-            s32 sync_x = btn_x + btn_w + sync_gap;
-            const s32 sync_w = 430;
-            const s32 sync_h = btn_h;
-
-            bool sync_focused = actions_focused && selected_action_idx == 1;
-            pu::ui::Color sync_border;
-            s32 sync_border_w = 0;
-            if (sync_focused) {
-                sync_border = pu::ui::Color(230, 199, 167, 255);
-                sync_border_w = 4;
-            } else {
-                sync_border = pu::ui::Color(230, 199, 167, 100);
-                sync_border_w = 2;
-            }
-
-            drawer->RenderRoundedRectangleFill(sync_border, sync_x, btn_y, sync_w, sync_h, 8);
-            drawer->RenderRoundedRectangleFill(btn_bg, sync_x + sync_border_w, btn_y + sync_border_w,
-                                               sync_w - (sync_border_w * 2), sync_h - (sync_border_w * 2), 6);
-
-            // Mirror the download button's dynamic state into this rendered
-            // button next frame via texture reuse: keep it simple, the modal
-            // carries the per-stage detail.
-            if (tex_btn_sync) {
-                s32 tw = pu::ui::render::GetTextureWidth(tex_btn_sync);
-                s32 th = pu::ui::render::GetTextureHeight(tex_btn_sync);
-                drawer->RenderTexture(tex_btn_sync, sync_x + (sync_w - tw) / 2, btn_y + (sync_h - th) / 2);
-            }
-        }
-
-        // Draw Progress Bar if needed
-        if (draw_progress_bar) {
-            s32 pb_h = 14;
-            s32 pb_w = btn_w;
-            s32 pb_x = btn_x;
-            s32 pb_y = btn_y + btn_h + 10;
-
-            pu::ui::Color pb_bg(16, 18, 22, 255);
-            pu::ui::Color pb_fill(85, 63, 152, 255); // Violet accent
-
-            drawer->RenderRoundedRectangleFill(pb_bg, pb_x, pb_y, pb_w, pb_h, 6);
-            if (progress_pct > 0.0f) {
-                s32 fill_w = (s32)(pb_w * progress_pct);
-                if (fill_w > 0) {
-                    drawer->RenderRoundedRectangleFill(pb_fill, pb_x, pb_y, fill_w, pb_h, 6);
-                }
-            }
+        // The sync button is the sole detail action. Its status lives in the
+        // sync modal; the button only reports availability.
+        if (tex_btn_sync) {
+            s32 tw = pu::ui::render::GetTextureWidth(tex_btn_sync);
+            s32 th = pu::ui::render::GetTextureHeight(tex_btn_sync);
+            drawer->RenderTexture(tex_btn_sync, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
         }
 
         // Tabs Row (4 tabs)

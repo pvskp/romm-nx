@@ -1,5 +1,6 @@
 #include "SyncModal.hpp"
 #include "../model/SyncManager.hpp"
+#include "../ui/DetailLayout.hpp"
 #include "../i18n/I18n.hpp"
 
 namespace romm::ui {
@@ -19,46 +20,59 @@ namespace romm::ui {
         pu::ui::Color state_fail(230, 110, 110, 255);
         pu::ui::Color state_skip(170, 170, 190, 255);
 
-        s32 panel_w = 880;
-        s32 panel_h = 560;
+        s32 panel_w = 900;
+        s32 panel_h = 620;
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
         drawer->RenderRoundedRectangleFill(pu::ui::Color(45, 50, 62, 255), panel_x, panel_y, panel_w, panel_h, 16);
         drawer->RenderRoundedRectangleFill(pu::ui::Color(16, 18, 22, 255), panel_x + 4, panel_y + 4, panel_w - 8, panel_h - 8, 12);
 
-        // Title: sync.title, plus the game title below it (server data, raw).
+        // Title + game title.
         pu::sdl2::Texture tex_title = pu::ui::render::RenderText("Orbitron@37", romm::i18n::tr("sync.title"), text_color);
         if (tex_title) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_title);
-            drawer->RenderTexture(tex_title, panel_x + (panel_w - tw) / 2, panel_y + 30);
+            drawer->RenderTexture(tex_title, panel_x + (panel_w - tw) / 2, panel_y + 26);
             pu::ui::render::DeleteTexture(tex_title);
         }
         pu::sdl2::Texture tex_game = pu::ui::render::RenderText("Ubuntu@22", Truncate(snap.title, 52), dim_color);
         if (tex_game) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_game);
-            drawer->RenderTexture(tex_game, panel_x + (panel_w - tw) / 2, panel_y + 82);
+            drawer->RenderTexture(tex_game, panel_x + (panel_w - tw) / 2, panel_y + 76);
             pu::ui::render::DeleteTexture(tex_game);
         }
 
+        s32 row_y0 = panel_y + 168;
+        const s32 row_h = 122;
+
+        // Warning banner (compressed ROM etc.) pushes the rows down.
+        if (!snap.warning.empty()) {
+            s32 warn_h = 56;
+            drawer->RenderRoundedRectangleFill(pu::ui::Color(120, 70, 20, 255),
+                                               panel_x + 30, row_y0 - 64, panel_w - 60, warn_h, 10);
+            pu::sdl2::Texture tex_warn = pu::ui::render::RenderText("Ubuntu@20", Truncate(snap.warning, 96), pu::ui::Color(255, 220, 150, 255));
+            if (tex_warn) {
+                drawer->RenderTexture(tex_warn, panel_x + 46, row_y0 - 64 + 16);
+                pu::ui::render::DeleteTexture(tex_warn);
+            }
+            row_y0 += 48;
+        }
+
         static const char* kStageKeys[] = {"sync.stage.rom", "sync.stage.saves", "sync.stage.cover"};
-        const s32 row_y0 = panel_y + 150;
-        const s32 row_h = 118;
 
         for (size_t i = 0; i < snap.stages.size() && i < 3; ++i) {
             const auto& stage = snap.stages[i];
             const s32 ry = row_y0 + (s32)i * row_h;
 
             drawer->RenderRoundedRectangleFill(pu::ui::Color(28, 31, 38, 255),
-                                               panel_x + 30, ry, panel_w - 60, row_h - 24, 10);
+                                               panel_x + 30, ry, panel_w - 60, row_h - 28, 10);
 
             pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr(kStageKeys[i]), text_color);
             if (tex_label) {
-                drawer->RenderTexture(tex_label, panel_x + 50, ry + 22);
+                drawer->RenderTexture(tex_label, panel_x + 50, ry + 20);
                 pu::ui::render::DeleteTexture(tex_label);
             }
 
-            // State badge.
             const char* state_key = "sync.state.pending";
             pu::ui::Color state_color = dim_color;
             switch (stage.state) {
@@ -73,25 +87,146 @@ namespace romm::ui {
             pu::sdl2::Texture tex_state = pu::ui::render::RenderText("Orbitron@24", romm::i18n::tr(state_key), state_color);
             if (tex_state) {
                 s32 tw = pu::ui::render::GetTextureWidth(tex_state);
-                drawer->RenderTexture(tex_state, panel_x + panel_w - 60 - tw, ry + 24);
+                drawer->RenderTexture(tex_state, panel_x + panel_w - 60 - tw, ry + 22);
                 pu::ui::render::DeleteTexture(tex_state);
             }
 
-            // Detail message under the label.
             if (!stage.message.empty()) {
-                pu::sdl2::Texture tex_msg = pu::ui::render::RenderText("Ubuntu@22", Truncate(stage.message, 68), dim_color);
+                pu::sdl2::Texture tex_msg = pu::ui::render::RenderText("Ubuntu@22", Truncate(stage.message, 70), dim_color);
                 if (tex_msg) {
-                    drawer->RenderTexture(tex_msg, panel_x + 50, ry + 64);
+                    drawer->RenderTexture(tex_msg, panel_x + 50, ry + 62);
                     pu::ui::render::DeleteTexture(tex_msg);
                 }
             }
         }
 
-        // Footer hint: B closes the modal (the sync keeps running).
         pu::sdl2::Texture tex_hint = pu::ui::render::RenderText("Ubuntu@22", romm::i18n::tr("sync.close"), dim_color);
         if (tex_hint) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_hint);
             drawer->RenderTexture(tex_hint, panel_x + (panel_w - tw) / 2, panel_y + panel_h - 46);
+            pu::ui::render::DeleteTexture(tex_hint);
+        }
+    }
+
+    void SyncModal::RenderOptions(pu::ui::render::Renderer::Ref& drawer) {
+        auto nav = nav_mgr.lock();
+        if (!nav) return;
+
+        pu::ui::Color text_color(237, 229, 251, 255);
+        pu::ui::Color dim_color(190, 180, 225, 255);
+        pu::ui::Color highlight(230, 199, 167, 255);
+
+        s32 panel_w = 900;
+        s32 panel_h = 640;
+        s32 panel_x = (1920 - panel_w) / 2;
+        s32 panel_y = (1080 - panel_h) / 2;
+
+        drawer->RenderRoundedRectangleFill(pu::ui::Color(45, 50, 62, 255), panel_x, panel_y, panel_w, panel_h, 16);
+        drawer->RenderRoundedRectangleFill(pu::ui::Color(16, 18, 22, 255), panel_x + 4, panel_y + 4, panel_w - 8, panel_h - 8, 12);
+
+        pu::sdl2::Texture tex_title = pu::ui::render::RenderText("Orbitron@37", romm::i18n::tr("sync.title"), text_color);
+        if (tex_title) {
+            s32 tw = pu::ui::render::GetTextureWidth(tex_title);
+            drawer->RenderTexture(tex_title, panel_x + (panel_w - tw) / 2, panel_y + 26);
+            pu::ui::render::DeleteTexture(tex_title);
+        }
+
+        // Compressed-ROM warning up front, so the user knows before starting.
+        std::string rom_name;
+        if (auto lyt = nav->GetDetailLayout()) {
+            const int rid = lyt->ctx.rom_id;
+            if (auto model = nav->GetModel()) {
+                if (const auto* d = model->GetCachedDetail(rid)) {
+                    if (!d->files.empty()) {
+                        rom_name = d->files.front().file_name;
+                    } else {
+                        rom_name = d->file_name;
+                    }
+                }
+            }
+        }
+        const bool compressed = !rom_name.empty() &&
+                                romm::model::SyncManager::IsCompressedArchive(rom_name);
+        s32 body_y = panel_y + 96;
+        if (compressed) {
+            const s32 warn_h = 64;
+            drawer->RenderRoundedRectangleFill(pu::ui::Color(120, 70, 20, 255),
+                                               panel_x + 40, body_y, panel_w - 80, warn_h, 10);
+            size_t dot = rom_name.find_last_of('.');
+            std::string ext = (dot != std::string::npos) ? rom_name.substr(dot) : "";
+            pu::sdl2::Texture tex_warn = pu::ui::render::RenderText("Ubuntu@20",
+                Truncate(romm::i18n::format("sync.warning.compressed", {{"ext", ext}}), 100),
+                pu::ui::Color(255, 220, 150, 255));
+            if (tex_warn) {
+                drawer->RenderTexture(tex_warn, panel_x + 56, body_y + 20);
+                pu::ui::render::DeleteTexture(tex_warn);
+            }
+            body_y += 84;
+        }
+
+        const size_t sel = nav->GetSyncOptionIdx();
+        const bool force_rom = nav->GetSyncOptionForceRom();
+        const bool force_cover = nav->GetSyncOptionForceCover();
+        const size_t save_dir = nav->GetSyncOptionSaveDir();
+
+        struct Row { const char* key; std::string value; };
+        const Row rows[4] = {
+            { "sync.option.force_rom",
+              force_rom ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
+            { "sync.option.force_cover",
+              force_cover ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
+            { "sync.option.saves",
+              (save_dir == 1) ? romm::i18n::tr("sync.option.saves.upload")
+              : (save_dir == 2) ? romm::i18n::tr("sync.option.saves.download")
+              :                  romm::i18n::tr("sync.option.saves.auto") },
+            { "sync.option.start", "" }
+        };
+
+        const s32 row_h = 92;
+        for (size_t i = 0; i < 4; ++i) {
+            const s32 ry = body_y + (s32)i * (row_h + 12);
+            const bool focused = (i == sel);
+            const bool is_start = (i == 3);
+
+            pu::ui::Color border = focused ? highlight : pu::ui::Color(45, 50, 62, 255);
+            pu::ui::Color bg = focused ? pu::ui::Color(85, 63, 152, 255)
+                                       : pu::ui::Color(28, 31, 38, 255);
+            s32 bw = panel_w - 100;
+            s32 bx = panel_x + 50;
+            drawer->RenderRoundedRectangleFill(border, bx, ry, bw, row_h - 12, 12);
+            drawer->RenderRoundedRectangleFill(bg, bx + 4, ry + 4, bw - 8, row_h - 20, 10);
+
+            std::string label = romm::i18n::tr(rows[i].key);
+            if (is_start) {
+                label.clear();
+            }
+            pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", label, text_color);
+            if (tex_label) {
+                drawer->RenderTexture(tex_label, bx + 24, ry + (row_h - 12 - pu::ui::render::GetTextureHeight(tex_label)) / 2);
+                pu::ui::render::DeleteTexture(tex_label);
+            }
+
+            if (!is_start && !rows[i].value.empty()) {
+                pu::sdl2::Texture tex_val = pu::ui::render::RenderText("Orbitron@24", rows[i].value, highlight);
+                if (tex_val) {
+                    s32 tw = pu::ui::render::GetTextureWidth(tex_val);
+                    drawer->RenderTexture(tex_val, bx + bw - tw - 24, ry + 22);
+                    pu::ui::render::DeleteTexture(tex_val);
+                }
+            } else if (is_start) {
+                pu::sdl2::Texture tex_start = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("sync.option.start"), text_color);
+                if (tex_start) {
+                    s32 tw = pu::ui::render::GetTextureWidth(tex_start);
+                    drawer->RenderTexture(tex_start, bx + (bw - tw) / 2, ry + (row_h - 12 - pu::ui::render::GetTextureHeight(tex_start)) / 2);
+                    pu::ui::render::DeleteTexture(tex_start);
+                }
+            }
+        }
+
+        pu::sdl2::Texture tex_hint = pu::ui::render::RenderText("Ubuntu@22", romm::i18n::tr("sync.option.hint"), dim_color);
+        if (tex_hint) {
+            s32 tw = pu::ui::render::GetTextureWidth(tex_hint);
+            drawer->RenderTexture(tex_hint, panel_x + (panel_w - tw) / 2, panel_y + panel_h - 44);
             pu::ui::render::DeleteTexture(tex_hint);
         }
     }
@@ -175,11 +310,15 @@ namespace romm::ui {
         auto nav = nav_mgr.lock();
         if (!nav || !nav->IsSyncModalActive()) return;
 
-        const auto snap = romm::model::SyncManager::Instance().GetSnapshot();
-
         // Dim background
         drawer->RenderRectangleFill(pu::ui::Color(0, 0, 0, 200), 0, 0, 1920, 1080);
 
+        if (nav->GetSyncModalMode() == romm::navigation::SyncModalMode::Options) {
+            RenderOptions(drawer);
+            return;
+        }
+
+        const auto snap = romm::model::SyncManager::Instance().GetSnapshot();
         // Wait one frame's worth of snapshot before drawing progress — the
         // snapshot is empty until the worker initializes it.
         if (snap.stages.empty()) return;

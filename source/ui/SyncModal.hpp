@@ -15,6 +15,7 @@ namespace romm::ui {
         std::weak_ptr<romm::navigation::NavigationManager> nav_mgr;
 
         std::string Truncate(const std::string& text, size_t max_chars) const;
+        void RenderOptions(pu::ui::render::Renderer::Ref& drawer);
         void RenderProgress(pu::ui::render::Renderer::Ref& drawer);
         void RenderConflict(pu::ui::render::Renderer::Ref& drawer);
 

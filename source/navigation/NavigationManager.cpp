@@ -221,8 +221,61 @@ namespace romm::navigation {
         if (!sync_modal_active) return;
 
         auto& sync = romm::model::SyncManager::Instance();
-        const auto snap = sync.GetSnapshot();
 
+        // Pre-flight options screen: the sync has not started yet.
+        if (sync_modal_mode == SyncModalMode::Options) {
+            static constexpr size_t kOptionRows = 4; // rom, cover, saves, start
+            if (keys_down & HidNpadButton_B) {
+                sync_modal_active = false;
+                sync_option_idx = 0;
+            } else if (keys_down & HidNpadButton_Up) {
+                if (sync_option_idx > 0) sync_option_idx--;
+            } else if (keys_down & HidNpadButton_Down) {
+                if (sync_option_idx + 1 < kOptionRows) sync_option_idx++;
+            } else if ((keys_down & HidNpadButton_Left) || (keys_down & HidNpadButton_Right)) {
+                if (sync_option_idx == 0) {
+                    sync_opt_force_rom = !sync_opt_force_rom;
+                } else if (sync_option_idx == 1) {
+                    sync_opt_force_cover = !sync_opt_force_cover;
+                } else if (sync_option_idx == 2) {
+                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                }
+            } else if (keys_down & HidNpadButton_A) {
+                if (sync_option_idx == 3) {
+                    // Start the sync with the chosen options.
+                    int rom_id = (detail_layout) ? detail_layout->ctx.rom_id : 0;
+                    const auto* detail = (model) ? model->GetCachedDetail(rom_id) : nullptr;
+                    if (detail) {
+                        romm::model::SyncOptions opts;
+                        opts.force_rom = sync_opt_force_rom;
+                        opts.force_cover = sync_opt_force_cover;
+                        opts.force_save_upload = (sync_opt_save_dir == 1);
+                        opts.force_save_download = (sync_opt_save_dir == 2);
+                        sync.StartSync(*detail, detail_layout->ctx.platform_slug,
+                                       detail_layout->ctx.title, opts);
+                        sync_modal_mode = SyncModalMode::Progress;
+                        sync_conflict_selected_idx = 0;
+                        std::cout << "[NAV] [SYNC] Starting sync for rom_id=" << rom_id
+                                  << " force_rom=" << opts.force_rom
+                                  << " force_cover=" << opts.force_cover
+                                  << " save_dir=" << sync_opt_save_dir << std::endl;
+                    } else {
+                        std::cerr << "[NAV] Sync start ignored: detail not loaded for rom "
+                                  << rom_id << std::endl;
+                    }
+                } else if (sync_option_idx == 0) {
+                    sync_opt_force_rom = !sync_opt_force_rom;
+                } else if (sync_option_idx == 1) {
+                    sync_opt_force_cover = !sync_opt_force_cover;
+                } else if (sync_option_idx == 2) {
+                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                }
+            }
+            return;
+        }
+
+        // Progress mode: conflict prompt first, then plain close.
+        const auto snap = sync.GetSnapshot();
         if (snap.conflict.active) {
             if (keys_down & HidNpadButton_Up) {
                 if (sync_conflict_selected_idx > 0) sync_conflict_selected_idx--;
@@ -1070,66 +1123,31 @@ namespace romm::navigation {
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Cover" << std::endl;
                 }
-                // Left/Right cycle between the two action buttons
-                // (0 = Download, 1 = Sync); Tabs is reached via Cover -> Right.
-                else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                    if (selected_detail_action_idx > 0) {
-                        selected_detail_action_idx--;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL ACTION] Selected action: " << selected_detail_action_idx << std::endl;
-                    }
-                }
                 else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    if (selected_detail_action_idx + 1 < 2) {
-                        selected_detail_action_idx++;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL ACTION] Selected action: " << selected_detail_action_idx << std::endl;
-                    }
+                    detail_focus = DetailFocus::Tabs;
+                    selected_detail_tab_idx = 0;
+                    state_changed = true;
+                    if (detail_layout) detail_layout->UpdateFooterHints();
+                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Tabs" << std::endl;
                 }
-                // A on the selected action - single press only
+                // A on the sync action - single press only. The sync options
+                // modal opens first; the worker starts on confirmation there.
                 else if (keys_down & HidNpadButton_A) {
-                    std::cout << "[NAV] [A PRESS] Triggered detail action" << std::endl;
-
+                    std::cout << "[NAV] [A PRESS] Triggered detail action (Sync)" << std::endl;
                     if (detail_layout) {
                         int rom_id = detail_layout->ctx.rom_id;
                         const auto* detail = model->GetCachedDetail(rom_id);
                         if (!detail) {
                             std::cerr << "[NAV] Detail not loaded yet." << std::endl;
-                        } else if (selected_detail_action_idx == 1) {
-                            // Sync: ROM + saves + cover to the Tico folders.
-                            romm::model::SyncManager::Instance().StartSync(
-                                *detail, detail_layout->ctx.platform_slug, detail_layout->ctx.title);
-                            sync_modal_active = true;
-                            sync_conflict_selected_idx = 0;
-                            std::cout << "[NAV] [SYNC] Sync modal opened for rom_id=" << rom_id << std::endl;
                         } else {
-                            auto& dl_mgr = romm::model::DownloadManager::Instance();
-                            auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
-
-                            if (detail_layout->GetCard()) {
-                                romm::ui::DownloadActionState action = detail_layout->GetCard()->GetActionState();
-                                
-                                if (action == romm::ui::DownloadActionState::Uninstall) {
-                                    // Open Modal
-                                    UninstallModalPayload p;
-                                    p.rom_id = rom_id;
-                                    p.platform_slug = detail_layout->ctx.platform_slug;
-                                    p.title = detail_layout->ctx.title;
-                                    // Multi-disc: pass the root .m3u identity; UninstallGame
-                                    // sweeps the subfolder discs and playlist from there.
-                                    p.filename = dl_mgr.InstallIdentityFilename(
-                                        detail_layout->ctx.platform_slug, detail->files, detail->file_name);
-                                    p.cover_path = detail_layout->ctx.cover_path;
-                                    p.source_screen = current_screen;
-                                    ShowUninstallModal(p);
-                                } else if (action == romm::ui::DownloadActionState::Queued) {
-                                    dl_mgr.RemoveFromQueue(rom_id);
-                                } else if (action == romm::ui::DownloadActionState::Failed) {
-                                    dl_mgr.RetryFailed(rom_id);
-                                } else if (action == romm::ui::DownloadActionState::Download || action == romm::ui::DownloadActionState::AddToQueue) {
-                                    dl_mgr.EnqueueDownload(*detail, detail_layout->ctx.platform_slug, detail_layout->ctx.title);
-                                }
-                            }
+                            sync_modal_active = true;
+                            sync_modal_mode = romm::navigation::SyncModalMode::Options;
+                            sync_option_idx = 0;
+                            sync_opt_force_rom = false;
+                            sync_opt_force_cover = false;
+                            sync_opt_save_dir = 0;
+                            sync_conflict_selected_idx = 0;
+                            std::cout << "[NAV] [SYNC] Sync options opened for rom_id=" << rom_id << std::endl;
                         }
                     }
                 }

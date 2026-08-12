@@ -54,6 +54,18 @@ namespace romm::model {
         std::string title;
         std::vector<SyncStageResult> stages; // order: Rom, Saves, Cover
         SaveConflict conflict;
+        std::string warning; // e.g. compressed-ROM notice, shown as a banner
+    };
+
+    // User-chosen overrides applied on this run. When any "force" flag is set
+    // the corresponding stage ignores the skip/conflict logic and always
+    // transfers in the requested direction. force_save_upload and
+    // force_save_download are mutually exclusive (the UI is a radio).
+    struct SyncOptions {
+        bool force_rom = false;          // re-download the ROM even if present
+        bool force_save_upload = false;  // push the local save unconditionally
+        bool force_save_download = false; // pull the server save unconditionally
+        bool force_cover = false;        // re-download the cover even if present
     };
 
     // One game's record inside sync_state.json. The fingerprint pairs the
@@ -77,7 +89,8 @@ namespace romm::model {
         // Kicks off a background sync of one game (ROM -> saves -> cover).
         // No-op if a sync is already running. The UI then opens the sync modal,
         // which polls GetSnapshot() every frame.
-        void StartSync(const GameDetail& detail, const std::string& platform_slug, const std::string& title);
+        void StartSync(const GameDetail& detail, const std::string& platform_slug,
+                       const std::string& title, const SyncOptions& options = SyncOptions());
 
         SyncSnapshot GetSnapshot() const;
         bool IsRunning() const;
@@ -96,6 +109,11 @@ namespace romm::model {
         // "<size>-<shorthash>" for a file, "" if it doesn't exist.
         static std::string CalcFingerprint(const std::string& path);
 
+        // True when `filename`'s extension is a compressed archive (7z, zip,
+        // rar, ...). Tico can't run these directly — the UI warns the user to
+        // extract (e.g. with DBI) before expecting a game to launch.
+        static bool IsCompressedArchive(const std::string& filename);
+
         // --- sync_state.json persistence --------------------------------
         static constexpr const char* kSyncStatePath = "sdmc:/switch/romm-nx/sync_state.json";
         void LoadSyncState();
@@ -108,9 +126,11 @@ namespace romm::model {
 
         SyncManager() = default;
 
-        void Worker(const GameDetail& detail, const std::string& platform_slug, const std::string& title);
+        void Worker(const GameDetail& detail, const std::string& platform_slug, const std::string& title,
+                    const SyncOptions& options);
         void Finish();
         void SetStage(SyncStage stage, SyncStageState state, const std::string& message);
+        void SetWarning(const std::string& warning);
         int StageIndex(SyncStage stage) const;
 
         // Returns once the conflict prompt has been answered or the sync was
@@ -122,7 +142,8 @@ namespace romm::model {
         bool RunSaveUpload(const std::string& target, int rom_id,
                            const std::string& tico_slug, const std::string& core,
                            const std::string& rom_path, long long rom_size);
-        void RunSavesStage(int rom_id, const std::string& tico_slug, const std::string& target);
+        void RunSavesStage(int rom_id, const std::string& tico_slug, const std::string& target,
+                           const SyncOptions& options);
 
         // Stateless trampoline the worker pthread starts on.
         static void* SyncTrampoline(void* arg);
