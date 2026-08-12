@@ -29,23 +29,23 @@ namespace romm::model {
             SyncOptions options;
         };
 
+        struct PlatformSyncJob {
+            std::string platform_slug;
+            std::string platform_name;
+            std::vector<SyncGameEntry> games;
+            SyncOptions options;
+        };
+
         std::string StripExtension(const std::string& filename) {
             size_t dot = filename.find_last_of('.');
             return (dot != std::string::npos) ? filename.substr(0, dot) : filename;
         }
 
-        // Blocks this thread until the HTTP pool finishes the result object,
-        // or the sync was cancelled (in which case we stop waiting and let the
+        // Blocks this thread until the HTTP pool finishes a result object, or
+        // the sync was cancelled (in which case we stop waiting and let the
         // pool lane finish on its own — it only writes to the result struct).
-        bool WaitForHttp(const std::shared_ptr<HttpResult>& result, std::atomic<bool>& cancel) {
-            while (result && !result->completed) {
-                if (cancel.load()) return false;
-                svcSleepThread(10 * 1000 * 1000LL); // 10 ms
-            }
-            return result && !cancel.load();
-        }
-
-        bool WaitForSaves(const std::shared_ptr<SaveFetchResult>& result, std::atomic<bool>& cancel) {
+        template <typename T>
+        bool WaitForCompleted(const std::shared_ptr<T>& result, std::atomic<bool>& cancel) {
             while (result && !result->completed) {
                 if (cancel.load()) return false;
                 svcSleepThread(10 * 1000 * 1000LL); // 10 ms
@@ -58,6 +58,13 @@ namespace romm::model {
     void* SyncManager::SyncTrampoline(void* arg) {
         std::unique_ptr<SyncJob> job(static_cast<SyncJob*>(arg));
         SyncManager::Instance().Worker(job->detail, job->platform_slug, job->title, job->options);
+        return nullptr;
+    }
+
+    void* SyncManager::PlatformSyncTrampoline(void* arg) {
+        std::unique_ptr<PlatformSyncJob> job(static_cast<PlatformSyncJob*>(arg));
+        SyncManager::Instance().PlatformWorker(job->platform_slug, job->platform_name,
+                                               job->games, job->options);
         return nullptr;
     }
 
@@ -253,6 +260,68 @@ namespace romm::model {
         std::cout << "[SYNC] Started rom_id=" << detail.rom_id << " slug=" << platform_slug << std::endl;
     }
 
+    void SyncManager::StartPlatformSync(const std::string& platform_slug,
+                                        const std::string& platform_name,
+                                        const std::vector<SyncGameEntry>& games,
+                                        const SyncOptions& options) {
+        if (worker_running_.load()) {
+            std::cout << "[SYNC] Already running, ignoring StartPlatformSync" << std::endl;
+            return;
+        }
+        if (games.empty()) {
+            std::cout << "[SYNC] Platform sync requested with no games, ignoring" << std::endl;
+            return;
+        }
+
+        LoadSyncState();
+        cancel_requested_ = false;
+        conflict_pending_ = false;
+        conflict_skipped_ = false;
+
+        if (thread_started_) {
+            pthread_join(worker_thread_, nullptr);
+            thread_started_ = false;
+        }
+
+        PlatformSyncJob* job = new PlatformSyncJob();
+        job->platform_slug = platform_slug;
+        job->platform_name = platform_name;
+        job->games = games;
+        job->options = options;
+
+        worker_running_ = true;
+
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 0x100000);
+        const int rc = pthread_create(&worker_thread_, &attr, &PlatformSyncTrampoline, job);
+        pthread_attr_destroy(&attr);
+        if (rc != 0) {
+            delete job;
+            worker_running_ = false;
+            std::cerr << "[SYNC] Failed to spawn platform worker thread" << std::endl;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot_ = SyncSnapshot();
+                snapshot_.running = false;
+                snapshot_.platform_slug = platform_slug;
+                snapshot_.bulk_mode = true;
+                snapshot_.bulk_total = (int)games.size();
+                snapshot_.platform_name = platform_name;
+                snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Failed,
+                                            romm::i18n::tr("sync.error.thread")});
+                snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Failed,
+                                            romm::i18n::tr("sync.error.thread")});
+                snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Failed,
+                                            romm::i18n::tr("sync.error.thread")});
+            }
+            return;
+        }
+        thread_started_ = true;
+        std::cout << "[SYNC] Started platform sync slug=" << platform_slug
+                  << " games=" << games.size() << std::endl;
+    }
+
     bool SyncManager::IsRunning() const {
         return worker_running_.load();
     }
@@ -411,7 +480,7 @@ namespace romm::model {
         std::string server_name = (slash != std::string::npos) ? target.substr(slash + 1) : target;
 
         auto res = RommApi::uploadSaveAsync(rom_id, core, true, target, server_name);
-        if (!WaitForHttp(res, cancel_requested_)) return false;
+        if (!WaitForCompleted(res, cancel_requested_)) return false;
         if (!res->success) {
             SetStage(SyncStage::Saves, SyncStageState::Failed,
                      romm::i18n::format("sync.saves.failed", {{"error", res->error.empty()
@@ -444,9 +513,12 @@ namespace romm::model {
     }
 
     // Full per-save decision flow (decision table in the PRD, section 5.5).
-    // The worker runs this after resolving the save target path.
+    // The worker runs this after resolving the save target path. When
+    // prompt_conflicts is false (platform-wide sync), conflicts are skipped
+    // and reported instead of blocking on the user.
     void SyncManager::RunSavesStage(int rom_id, const std::string& tico_slug,
-                                    const std::string& target, const SyncOptions& options) {
+                                    const std::string& target, const SyncOptions& options,
+                                    bool prompt_conflicts) {
         std::string core = ResolveTicoCore(tico_slug);
         if (core.empty()) {
             SetStage(SyncStage::Saves, SyncStageState::Unsupported,
@@ -463,7 +535,7 @@ namespace romm::model {
             SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             return;
         }
-        if (!WaitForSaves(fetch, cancel_requested_)) return;
+        if (!WaitForCompleted(fetch, cancel_requested_)) return;
         if (!fetch->success) {
             SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.saves.fetch_failed"));
             return;
@@ -568,6 +640,13 @@ namespace romm::model {
                 break;
             }
             case SaveAction::Prompt: {
+                // Platform-wide mode never blocks on the prompt: skip the save
+                // and let the user resolve it per game afterwards.
+                if (!prompt_conflicts) {
+                    SetStage(SyncStage::Saves, SyncStageState::Skipped,
+                             romm::i18n::tr("sync.bulk.conflict_skipped"));
+                    break;
+                }
                 SaveConflict conf;
                 conf.active = true;
                 conf.rom_id = rom_id;
@@ -612,30 +691,99 @@ namespace romm::model {
         }
     }
 
+    void SyncManager::ResetStages(const std::string& title) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.title = title;
+        snapshot_.warning.clear();
+        snapshot_.conflict.active = false;
+        snapshot_.stages.clear();
+        snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
+        snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
+        snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Pending, ""});
+    }
+
     void SyncManager::Worker(const GameDetail& detail, const std::string& platform_slug,
                              const std::string& title, const SyncOptions& options) {
-        struct stat st;
-
-        // Initialize the snapshot the modal will render.
         {
             std::lock_guard<std::mutex> lock(mutex_);
             snapshot_ = SyncSnapshot();
             snapshot_.running = true;
             snapshot_.rom_id = detail.rom_id;
             snapshot_.platform_slug = platform_slug;
-            snapshot_.title = title;
-            snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
-            snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
-            snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Pending, ""});
+            snapshot_.bulk_mode = false;
+            snapshot_.bulk_index = 0;
+            snapshot_.bulk_total = 1;
+        }
+        ResetStages(title);
+        ScreenWakeManager::Instance().RequestUpdate();
+        RunGameSync(detail, platform_slug, title, options, false);
+        Finish();
+    }
+
+    void SyncManager::PlatformWorker(const std::string& platform_slug,
+                                     const std::string& platform_name,
+                                     const std::vector<SyncGameEntry>& games,
+                                     const SyncOptions& options) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_ = SyncSnapshot();
+            snapshot_.running = true;
+            snapshot_.platform_slug = platform_slug;
+            snapshot_.bulk_mode = true;
+            snapshot_.bulk_index = 0;
+            snapshot_.bulk_total = (int)games.size();
+            snapshot_.platform_name = platform_name;
         }
         ScreenWakeManager::Instance().RequestUpdate();
+
+        for (size_t i = 0; i < games.size(); ++i) {
+            if (cancel_requested_.load()) break;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot_.bulk_index = (int)i;
+                snapshot_.rom_id = games[i].rom_id;
+            }
+            ResetStages(games[i].title);
+            ScreenWakeManager::Instance().RequestUpdate();
+            std::cout << "[SYNC] Platform sync game " << (i + 1) << "/" << games.size()
+                      << " rom_id=" << games[i].rom_id << " title=" << games[i].title << std::endl;
+
+            auto res = RommApi::fetchRomDetailAsync(games[i].rom_id, 0, platform_slug);
+            if (!res) {
+                SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
+                continue;
+            }
+            if (!WaitForCompleted(res, cancel_requested_)) {
+                SetStage(SyncStage::Rom, SyncStageState::Skipped, romm::i18n::tr("sync.cancelled"));
+                break;
+            }
+            if (!res->success) {
+                SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.bulk.detail_failed"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
+                continue;
+            }
+            RunGameSync(res->detail, platform_slug, games[i].title, options, true);
+        }
+        Finish();
+    }
+
+    // Shared per-game pipeline (ROM -> saves -> cover) used by both the
+    // single-game and the platform-wide workers. `bulk_mode` only changes the
+    // conflict handling: platform-wide runs skip conflicts instead of blocking
+    // on the prompt (those can be resolved later with the per-game sync).
+    void SyncManager::RunGameSync(const GameDetail& detail, const std::string& platform_slug,
+                                  const std::string& title, const SyncOptions& options,
+                                  bool bulk_mode) {
+        struct stat st;
 
         auto& config = ConfigManager::Instance();
         if (!config.IsValid()) {
             SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             SetStage(SyncStage::Cover, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-            Finish();
             return;
         }
 
@@ -654,14 +802,12 @@ namespace romm::model {
                      romm::i18n::tr("sync.multidisc"));
             SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
             SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            Finish();
             return;
         }
         if (files.empty()) {
             SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.rom.no_files"));
             SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
             SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            Finish();
             return;
         }
 
@@ -687,7 +833,6 @@ namespace romm::model {
         SetStage(SyncStage::Rom, SyncStageState::Running, romm::i18n::tr("sync.rom.downloading"));
 
         if (cancel_requested_.load()) {
-            Finish();
             return;
         }
 
@@ -705,7 +850,6 @@ namespace romm::model {
                      romm::i18n::tr("sync.rom.unsupported_ext"));
             SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
             SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            Finish();
             return;
         }
 
@@ -751,7 +895,6 @@ namespace romm::model {
         }
 
         if (cancel_requested_.load()) {
-            Finish();
             return;
         }
 
@@ -766,9 +909,8 @@ namespace romm::model {
         SaveSyncState();
 
         // --- Stage 2: Saves ----------------------------------------------
-        RunSavesStage(detail.rom_id, tico_slug, save_target, options);
+        RunSavesStage(detail.rom_id, tico_slug, save_target, options, !bulk_mode);
         if (cancel_requested_.load()) {
-            Finish();
             return;
         }
 
@@ -829,8 +971,6 @@ namespace romm::model {
                 }
             }
         }
-
-        Finish();
     }
 
 }

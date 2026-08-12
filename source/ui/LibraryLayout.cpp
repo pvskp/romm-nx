@@ -5,6 +5,7 @@
 #include "../navigation/NavigationManager.hpp"
 #include "GlobalProgressBar.hpp"
 #include "LibraryMenuModal.hpp"
+#include "SyncModal.hpp"
 #include "StatusBar.hpp"
 #include "UninstallConfirmModal.hpp"
 #include "../i18n/I18n.hpp"
@@ -60,6 +61,11 @@ namespace romm::ui {
         // Y-Menu overlay — added last so it renders on top of everything else
         library_menu_modal = LibraryMenuModal::New(nav);
         this->Add(library_menu_modal);
+
+        // Sync overlay: the platform-wide sync can be started from the Y-Menu
+        // without ever entering the Detail screen, so the modal must exist
+        // here too.
+        this->Add(romm::ui::SyncModal::New(nav));
     }
 
     LibraryLayout::~LibraryLayout() {}

@@ -51,10 +51,22 @@ namespace romm::model {
         bool running = false;
         int rom_id = 0;
         std::string platform_slug; // RomM slug
-        std::string title;
+        std::string title;         // current game title (or single-game title)
         std::vector<SyncStageResult> stages; // order: Rom, Saves, Cover
         SaveConflict conflict;
         std::string warning; // e.g. compressed-ROM notice, shown as a banner
+
+        // Platform-wide sync (one run per game, in order).
+        bool bulk_mode = false;
+        int bulk_index = 0; // 0-based index of the game currently running
+        int bulk_total = 0;
+        std::string platform_name; // display name of the platform being synced
+    };
+
+    // One game to process inside a platform-wide sync.
+    struct SyncGameEntry {
+        int rom_id = 0;
+        std::string title;
     };
 
     // User-chosen overrides applied on this run. When any "force" flag is set
@@ -92,6 +104,14 @@ namespace romm::model {
         void StartSync(const GameDetail& detail, const std::string& platform_slug,
                        const std::string& title, const SyncOptions& options = SyncOptions());
 
+        // Kicks off a platform-wide sync: every game in `games` is handled in
+        // order (ROM -> saves -> cover each). Save conflicts are never
+        // prompted in this mode — they are skipped and can be resolved later
+        // with the per-game Sync.
+        void StartPlatformSync(const std::string& platform_slug, const std::string& platform_name,
+                               const std::vector<SyncGameEntry>& games,
+                               const SyncOptions& options = SyncOptions());
+
         SyncSnapshot GetSnapshot() const;
         bool IsRunning() const;
 
@@ -128,6 +148,14 @@ namespace romm::model {
 
         void Worker(const GameDetail& detail, const std::string& platform_slug, const std::string& title,
                     const SyncOptions& options);
+        void PlatformWorker(const std::string& platform_slug, const std::string& platform_name,
+                            const std::vector<SyncGameEntry>& games, const SyncOptions& options);
+        // Shared per-game pipeline (ROM -> saves -> cover), used by both the
+        // single-game and the platform-wide workers.
+        void RunGameSync(const GameDetail& detail, const std::string& platform_slug,
+                         const std::string& title, const SyncOptions& options,
+                         bool bulk_mode);
+        void ResetStages(const std::string& title);
         void Finish();
         void SetStage(SyncStage stage, SyncStageState state, const std::string& message);
         void SetWarning(const std::string& warning);
@@ -143,10 +171,10 @@ namespace romm::model {
                            const std::string& tico_slug, const std::string& core,
                            const std::string& rom_path, long long rom_size);
         void RunSavesStage(int rom_id, const std::string& tico_slug, const std::string& target,
-                           const SyncOptions& options);
+                           const SyncOptions& options, bool prompt_conflicts = true);
 
-        // Stateless trampoline the worker pthread starts on.
         static void* SyncTrampoline(void* arg);
+        static void* PlatformSyncTrampoline(void* arg);
 
         mutable std::mutex mutex_;      // guards snapshot_
         SyncSnapshot snapshot_;

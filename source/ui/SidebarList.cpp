@@ -14,6 +14,10 @@ namespace romm::ui {
         // slides underneath it — so this is the single knob for the whole
         // pinning behaviour.
         constexpr s32 kSelectedSlot = 1;
+
+        // Height of the always-visible "Sync Platform" button pinned at the
+        // bottom of the sidebar.
+        constexpr s32 kSyncButtonStrip = 56;
     }
 
     SidebarList::SidebarList(s32 x, s32 y, s32 w, s32 h, std::shared_ptr<romm::navigation::NavigationManager> nav)
@@ -129,11 +133,14 @@ namespace romm::ui {
     }
 
     const BannerLayout& SidebarList::EnsureBannerLayout() {
-        if (layout_w != w || layout_h != h) {
-            banner_layout = ComputeBannerLayout(w, h);
+        // Reserve the bottom strip for the "Sync Platform" button so a banner
+        // never slides under it.
+        const s32 effective_h = h - kSyncButtonStrip;
+        if (layout_w != w || layout_h != effective_h) {
+            banner_layout = ComputeBannerLayout(w, effective_h);
             layout_w = w;
-            layout_h = h;
-            std::cout << "[BANNER] Sidebar " << w << "x" << h << " fits "
+            layout_h = effective_h;
+            std::cout << "[BANNER] Sidebar " << w << "x" << effective_h << " fits "
                       << banner_layout.slot_count << " banner(s) at "
                       << banner_layout.banner_w << "x" << banner_layout.banner_h << std::endl;
         }
@@ -162,6 +169,10 @@ namespace romm::ui {
         }
 
         const bool sidebar_focused = (nav->GetLibraryFocus() == romm::navigation::LibraryFocus::Sidebar);
+        // While the bottom sync button owns the focus, the platform rows draw
+        // their dim (unfocused) highlight so only one thing stands out.
+        const bool sync_button_focused = sidebar_focused && nav->IsLibraryPlatformSyncFocused();
+        const bool rows_focused = sidebar_focused && !sync_button_focused;
 
         // Settings > Theme can flip this while the library layout stays alive,
         // so it is read here rather than cached at construction. Leaving banner
@@ -182,11 +193,34 @@ namespace romm::ui {
         if (style == romm::model::PlatformSelectorStyle::Banners &&
             state == romm::model::ApiState::Success &&
             rows_are_platforms && EnsureBannerLayout().viable) {
-            RenderBanners(drawer, x_coord, y_coord, selected_idx, sidebar_focused);
-            return;
+            RenderBanners(drawer, x_coord, y_coord, selected_idx, rows_focused);
+        } else {
+            RenderTextRows(drawer, x_coord, y_coord, selected_idx, rows_focused);
         }
 
-        RenderTextRows(drawer, x_coord, y_coord, selected_idx, sidebar_focused);
+        // Pinned "Sync Platform" button. Only shown once real platforms are
+        // listed (never over the loading/error status cards).
+        if (rows_are_platforms) {
+            const s32 btn_y = y_coord + h - kSyncButtonStrip + 6;
+            const s32 btn_h = kSyncButtonStrip - 12;
+
+            pu::ui::Color border = sync_button_focused ? pu::ui::Color(230, 199, 167, 255)
+                                                       : pu::ui::Color(45, 50, 62, 255);
+            pu::ui::Color bg = sync_button_focused ? pu::ui::Color(85, 63, 152, 255)
+                                                   : pu::ui::Color(24, 27, 33, 255);
+            drawer->RenderRoundedRectangleFill(border, x_coord + 15, btn_y, w - 30, btn_h, 8);
+            drawer->RenderRoundedRectangleFill(bg, x_coord + 19, btn_y + 4, w - 38, btn_h - 8, 6);
+
+            pu::sdl2::Texture tex_btn = pu::ui::render::RenderText(
+                "Orbitron@24", romm::i18n::tr("library.sync_platform_btn"),
+                sync_button_focused ? pu::ui::Color(237, 229, 251, 255) : pu::ui::Color(190, 180, 225, 255));
+            if (tex_btn) {
+                s32 tw = pu::ui::render::GetTextureWidth(tex_btn);
+                s32 th = pu::ui::render::GetTextureHeight(tex_btn);
+                drawer->RenderTexture(tex_btn, x_coord + (w - tw) / 2, btn_y + (btn_h - th) / 2);
+                pu::ui::render::DeleteTexture(tex_btn);
+            }
+        }
     }
 
     void SidebarList::RenderTextRows(pu::ui::render::Renderer::Ref &drawer, const s32 x_coord, const s32 y_coord,

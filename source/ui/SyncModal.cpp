@@ -28,8 +28,16 @@ namespace romm::ui {
         drawer->RenderRoundedRectangleFill(pu::ui::Color(45, 50, 62, 255), panel_x, panel_y, panel_w, panel_h, 16);
         drawer->RenderRoundedRectangleFill(pu::ui::Color(16, 18, 22, 255), panel_x + 4, panel_y + 4, panel_w - 8, panel_h - 8, 12);
 
-        // Title + game title.
-        pu::sdl2::Texture tex_title = pu::ui::render::RenderText("Orbitron@37", romm::i18n::tr("sync.title"), text_color);
+        // Title + subtitle. In platform-wide mode the header names the platform
+        // and shows the running count; the game title sits below.
+        std::string header = romm::i18n::tr("sync.title");
+        if (snap.bulk_mode) {
+            header = romm::i18n::format("sync.bulk.progress",
+                                        {{"name", snap.platform_name},
+                                         {"index", std::to_string(snap.bulk_index + 1)},
+                                         {"total", std::to_string(snap.bulk_total)}});
+        }
+        pu::sdl2::Texture tex_title = pu::ui::render::RenderText("Orbitron@37", header, text_color);
         if (tex_title) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_title);
             drawer->RenderTexture(tex_title, panel_x + (panel_w - tw) / 2, panel_y + 26);
@@ -124,30 +132,49 @@ namespace romm::ui {
         drawer->RenderRoundedRectangleFill(pu::ui::Color(45, 50, 62, 255), panel_x, panel_y, panel_w, panel_h, 16);
         drawer->RenderRoundedRectangleFill(pu::ui::Color(16, 18, 22, 255), panel_x + 4, panel_y + 4, panel_w - 8, panel_h - 8, 12);
 
+        // Title + subtitle: game title (single) or platform name (bulk).
+        const bool bulk = nav->IsSyncBulkPending();
         pu::sdl2::Texture tex_title = pu::ui::render::RenderText("Orbitron@37", romm::i18n::tr("sync.title"), text_color);
         if (tex_title) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_title);
             drawer->RenderTexture(tex_title, panel_x + (panel_w - tw) / 2, panel_y + 26);
             pu::ui::render::DeleteTexture(tex_title);
         }
+        std::string subtitle;
+        if (bulk) {
+            subtitle = romm::i18n::format("sync.bulk.options_sub", {{"name", nav->GetSyncBulkPlatformName()}});
+        } else if (auto lyt = nav->GetDetailLayout()) {
+            subtitle = Truncate(lyt->ctx.title, 52);
+        }
+        if (!subtitle.empty()) {
+            pu::sdl2::Texture tex_sub = pu::ui::render::RenderText("Ubuntu@22", subtitle, dim_color);
+            if (tex_sub) {
+                s32 tw = pu::ui::render::GetTextureWidth(tex_sub);
+                drawer->RenderTexture(tex_sub, panel_x + (panel_w - tw) / 2, panel_y + 76);
+                pu::ui::render::DeleteTexture(tex_sub);
+            }
+        }
 
-        // Compressed-ROM warning up front, so the user knows before starting.
+        // Compressed-ROM warning only makes sense per game (single mode): the
+        // platform-wide run shows per-game warnings in the progress view.
         std::string rom_name;
-        if (auto lyt = nav->GetDetailLayout()) {
-            const int rid = lyt->ctx.rom_id;
-            if (auto model = nav->GetModel()) {
-                if (const auto* d = model->GetCachedDetail(rid)) {
-                    if (!d->files.empty()) {
-                        rom_name = d->files.front().file_name;
-                    } else {
-                        rom_name = d->file_name;
+        if (!bulk) {
+            if (auto lyt = nav->GetDetailLayout()) {
+                const int rid = lyt->ctx.rom_id;
+                if (auto model = nav->GetModel()) {
+                    if (const auto* d = model->GetCachedDetail(rid)) {
+                        if (!d->files.empty()) {
+                            rom_name = d->files.front().file_name;
+                        } else {
+                            rom_name = d->file_name;
+                        }
                     }
                 }
             }
         }
         const bool compressed = !rom_name.empty() &&
                                 romm::model::SyncManager::IsCompressedArchive(rom_name);
-        s32 body_y = panel_y + 96;
+        s32 body_y = panel_y + 120;
         if (compressed) {
             const s32 warn_h = 64;
             drawer->RenderRoundedRectangleFill(pu::ui::Color(120, 70, 20, 255),

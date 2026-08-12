@@ -138,6 +138,8 @@
   "library_menu.coming_soon": "Coming Soon",
   "library_menu.view_mode": "View Mode: {mode}",
 
+  "library.sync_platform_btn": "SYNC PLATFORM",
+
   "modal.uninstall.title": "Uninstall game?",
   "modal.update.title": "Update available!",
   "modal.update.body": "romm-nx v{version} is ready to install.",
@@ -204,6 +206,10 @@
   "sync.warning.compressed": "Compressed archive ({ext}) — Tico can't read it directly. Extract the ROM first (e.g. with DBI).",
   "sync.saves.no_local": "No local save to upload",
   "sync.saves.no_server": "No server save to download",
+  "sync.bulk.progress": "Platform: {name} ({index}/{total})",
+  "sync.bulk.options_sub": "{name} — all games",
+  "sync.bulk.conflict_skipped": "Save conflict — skipped (resolve per game)",
+  "sync.bulk.detail_failed": "Could not load game details",
 
   "save.error.config": "Save download blocked: invalid configuration",
   "save.error.filename": "Invalid save file name",

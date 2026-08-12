@@ -243,26 +243,36 @@ namespace romm::navigation {
             } else if (keys_down & HidNpadButton_A) {
                 if (sync_option_idx == 3) {
                     // Start the sync with the chosen options.
-                    int rom_id = (detail_layout) ? detail_layout->ctx.rom_id : 0;
-                    const auto* detail = (model) ? model->GetCachedDetail(rom_id) : nullptr;
-                    if (detail) {
-                        romm::model::SyncOptions opts;
-                        opts.force_rom = sync_opt_force_rom;
-                        opts.force_cover = sync_opt_force_cover;
-                        opts.force_save_upload = (sync_opt_save_dir == 1);
-                        opts.force_save_download = (sync_opt_save_dir == 2);
-                        sync.StartSync(*detail, detail_layout->ctx.platform_slug,
-                                       detail_layout->ctx.title, opts);
-                        sync_modal_mode = SyncModalMode::Progress;
-                        sync_conflict_selected_idx = 0;
-                        std::cout << "[NAV] [SYNC] Starting sync for rom_id=" << rom_id
-                                  << " force_rom=" << opts.force_rom
-                                  << " force_cover=" << opts.force_cover
-                                  << " save_dir=" << sync_opt_save_dir << std::endl;
+                    romm::model::SyncOptions opts;
+                    opts.force_rom = sync_opt_force_rom;
+                    opts.force_cover = sync_opt_force_cover;
+                    opts.force_save_upload = (sync_opt_save_dir == 1);
+                    opts.force_save_download = (sync_opt_save_dir == 2);
+
+                    if (sync_bulk_pending) {
+                        sync.StartPlatformSync(sync_bulk_platform_slug, sync_bulk_platform_name,
+                                               sync_bulk_games, opts);
+                        sync_bulk_pending = false;
+                        std::cout << "[NAV] [SYNC] Starting platform sync slug="
+                                  << sync_bulk_platform_slug
+                                  << " games=" << sync_bulk_games.size() << std::endl;
                     } else {
-                        std::cerr << "[NAV] Sync start ignored: detail not loaded for rom "
-                                  << rom_id << std::endl;
+                        int rom_id = (detail_layout) ? detail_layout->ctx.rom_id : 0;
+                        const auto* detail = (model) ? model->GetCachedDetail(rom_id) : nullptr;
+                        if (detail) {
+                            sync.StartSync(*detail, detail_layout->ctx.platform_slug,
+                                           detail_layout->ctx.title, opts);
+                            std::cout << "[NAV] [SYNC] Starting sync for rom_id=" << rom_id
+                                      << " force_rom=" << opts.force_rom
+                                      << " force_cover=" << opts.force_cover
+                                      << " save_dir=" << sync_opt_save_dir << std::endl;
+                        } else {
+                            std::cerr << "[NAV] Sync start ignored: detail not loaded for rom "
+                                      << rom_id << std::endl;
+                        }
                     }
+                    sync_modal_mode = SyncModalMode::Progress;
+                    sync_conflict_selected_idx = 0;
                 } else if (sync_option_idx == 0) {
                     sync_opt_force_rom = !sync_opt_force_rom;
                 } else if (sync_option_idx == 1) {
@@ -355,6 +365,39 @@ namespace romm::navigation {
         }
     }
 
+    void NavigationManager::OpenPlatformSyncOptions() {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (loaded_platform_idx >= platforms.size()) return;
+
+        const auto& plat = platforms[loaded_platform_idx];
+        sync_bulk_platform_slug = plat.slug;
+        sync_bulk_platform_name = plat.name;
+        sync_bulk_games.clear();
+        for (const auto& g : plat.games) {
+            romm::model::SyncGameEntry e;
+            e.rom_id = g.id;
+            e.title = g.title;
+            sync_bulk_games.push_back(e);
+        }
+        if (sync_bulk_games.empty()) {
+            std::cerr << "[NAV] [SYNC] Platform has no games loaded yet" << std::endl;
+            return;
+        }
+        sync_bulk_pending = true;
+        library_platform_sync_focused = false;
+        sync_modal_active = true;
+        sync_modal_mode = romm::navigation::SyncModalMode::Options;
+        sync_option_idx = 0;
+        sync_opt_force_rom = false;
+        sync_opt_force_cover = false;
+        sync_opt_save_dir = 0;
+        sync_conflict_selected_idx = 0;
+        std::cout << "[NAV] [SYNC] Platform sync options opened for "
+                  << sync_bulk_platform_name << " (" << sync_bulk_platform_slug
+                  << "), games=" << sync_bulk_games.size() << std::endl;
+    }
+
     void NavigationManager::HandleUpdateModalInput(u64 keys_down) {
         if (!update_modal_active) return;
 
@@ -394,6 +437,10 @@ namespace romm::navigation {
 
     void NavigationManager::ApplyPlatformVisibilityChange() {
         if (!model) return;
+
+        // The platform list is about to change shape; a focus parked on the
+        // bottom sync button would point at nothing.
+        library_platform_sync_focused = false;
 
         // Anchor on platform ids, not indices: the filter reorders the list, so
         // an index that was valid a moment ago can point at a different
@@ -678,8 +725,12 @@ namespace romm::navigation {
             // selection. Only meaningful once a game is actually highlighted,
             // so it's ignored while the sidebar or alphabet bar has focus.
             if (keys_down & HidNpadButton_X) {
+                // Works from the sidebar as well: the library lands on the
+                // sidebar when opened, and a mark that only responds after
+                // moving focus onto the grid reads as "X is broken".
                 const bool on_a_game = (library_focus == LibraryFocus::Grid ||
-                                        library_focus == LibraryFocus::Panel);
+                                        library_focus == LibraryFocus::Panel ||
+                                        library_focus == LibraryFocus::Sidebar);
                 if (on_a_game && selected_game_idx < filtered_count) {
                     ToggleBulkSelection(current_platform.games[filtered_indices[selected_game_idx]].id);
                     state_changed = true;
@@ -713,46 +764,65 @@ namespace romm::navigation {
             else if (library_focus == LibraryFocus::Sidebar) {
                 // Sidebar Up/Down: only moves focus highlight, does NOT trigger network fetch
                 if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
-                    if (selected_platform_idx > 0) {
+                    if (library_platform_sync_focused) {
+                        // Back from the Sync Platform button to the last platform.
+                        library_platform_sync_focused = false;
+                        state_changed = true;
+                        std::cout << "[NAV] Focus: Sync Platform button -> last platform" << std::endl;
+                    } else if (selected_platform_idx > 0) {
                         selected_platform_idx--;
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
                     }
                 }
                 else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    if (selected_platform_idx + 1 < platforms.size()) {
+                    if (library_platform_sync_focused) {
+                        // Already on the button; stay put.
+                    } else if (selected_platform_idx + 1 < platforms.size()) {
                         selected_platform_idx++;
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
+                    } else {
+                        // Past the last platform: land on the Sync Platform button.
+                        library_platform_sync_focused = true;
+                        state_changed = true;
+                        std::cout << "[NAV] Focus: last platform -> Sync Platform button" << std::endl;
                     }
                 }
-                // Sidebar Enter (A) -> load selected platform ROMs - single press only
+                // Sidebar Enter (A) -> load selected platform ROMs, or open the
+                // platform sync options when the bottom button has focus.
                 else if (keys_down & HidNpadButton_A) {
-                    loaded_platform_idx = selected_platform_idx;
-                    selected_game_idx = 0;
-                    selected_letter_idx = 0;
-                    // The query was scoped to the platform being left; carrying
-                    // it over would silently hide most of the new one. Same for
-                    // the bulk selection — invisible ids from another platform.
-                    ClearSearch();
-                    ClearBulkSelection();
-                    std::cout << "[PERF] Platform selected: " << platforms.at(selected_platform_idx).name << std::endl;
-                    std::cout << "[LIBRARY] Platform changed to " << platforms.at(selected_platform_idx).name << "/" << platforms.at(selected_platform_idx).slug << std::endl;
-
-                    auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                    main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
-
-                    if (ShowAlphabetFilter()) {
-                        library_focus = LibraryFocus::Alphabet;
-                        std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Sidebar -> Alphabet Bar" << std::endl;
+                    if (library_platform_sync_focused) {
+                        OpenPlatformSyncOptions();
+                        state_changed = true;
                     } else {
-                        library_focus = LibraryFocus::Grid;
-                        std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Sidebar -> Game Grid" << std::endl;
+                        loaded_platform_idx = selected_platform_idx;
+                        selected_game_idx = 0;
+                        selected_letter_idx = 0;
+                        // The query was scoped to the platform being left; carrying
+                        // it over would silently hide most of the new one. Same for
+                        // the bulk selection — invisible ids from another platform.
+                        ClearSearch();
+                        ClearBulkSelection();
+                        std::cout << "[PERF] Platform selected: " << platforms.at(selected_platform_idx).name << std::endl;
+                        std::cout << "[LIBRARY] Platform changed to " << platforms.at(selected_platform_idx).name << "/" << platforms.at(selected_platform_idx).slug << std::endl;
+
+                        auto main_app = static_cast<romm::ui::MainApplication*>(app);
+                        main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
+
+                        if (ShowAlphabetFilter()) {
+                            library_focus = LibraryFocus::Alphabet;
+                            std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Sidebar -> Alphabet Bar" << std::endl;
+                        } else {
+                            library_focus = LibraryFocus::Grid;
+                            std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Sidebar -> Game Grid" << std::endl;
+                        }
+                        state_changed = true;
                     }
-                    state_changed = true;
                 }
                 // Sidebar Right -> move focus to grid (no refetch)
                 else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    library_platform_sync_focused = false;
                     if (ShowAlphabetFilter()) {
                         library_focus = LibraryFocus::Alphabet;
                         std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Sidebar -> Alphabet Bar" << std::endl;
@@ -764,6 +834,7 @@ namespace romm::navigation {
                 }
                 // Sidebar Back (B) -> Return to Main Menu - single press only
                 else if (keys_down & HidNpadButton_B) {
+                    library_platform_sync_focused = false;
                     current_screen = Screen::MainMenu;
                     state_changed = true;
                     app->LoadLayout(main_menu_layout);
@@ -1147,6 +1218,7 @@ namespace romm::navigation {
                             sync_opt_force_cover = false;
                             sync_opt_save_dir = 0;
                             sync_conflict_selected_idx = 0;
+                            sync_bulk_pending = false;
                             std::cout << "[NAV] [SYNC] Sync options opened for rom_id=" << rom_id << std::endl;
                         }
                     }
