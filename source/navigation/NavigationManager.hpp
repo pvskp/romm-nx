@@ -123,6 +123,10 @@ namespace romm::navigation {
         bool library_menu_active = false;
         size_t library_menu_selected_idx = 0;  // 0=Search, 1=Sort, 2=View Mode
 
+        // Sync modal overlay (progress + conflict prompt).
+        bool sync_modal_active = false;
+        size_t sync_conflict_selected_idx = 0;
+
         // Persistent layouts created once
         std::shared_ptr<romm::ui::MainMenuLayout> main_menu_layout;
         std::shared_ptr<romm::ui::LibraryLayout> library_layout;
@@ -213,6 +217,14 @@ namespace romm::navigation {
         void HideUninstallModal() { uninstall_modal.active = false; }
         const UninstallModalPayload& GetUninstallModalState() const { return uninstall_modal; }
         void HandleUninstallModalInput(u64 keys_down);
+
+        // Sync modal controls. The modal is a view over SyncManager's snapshot;
+        // closing it only hides the UI, the worker keeps running.
+        bool IsSyncModalActive() const { return sync_modal_active; }
+        void ShowSyncModal() { sync_modal_active = true; sync_conflict_selected_idx = 0; }
+        void HideSyncModal() { sync_modal_active = false; }
+        size_t GetSyncConflictSelectedIdx() const { return sync_conflict_selected_idx; }
+        void HandleSyncModalInput(u64 keys_down);
 
         // Library Y-Menu controls
         bool IsLibraryMenuActive() const { return library_menu_active; }

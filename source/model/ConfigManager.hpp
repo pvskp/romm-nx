@@ -178,6 +178,18 @@ namespace romm::model {
         void SetRomsBaseDir(const std::string& dir);
         std::string GetRomPath(const std::string& platform) const;
 
+        // --- Tico sync paths --------------------------------------------
+        // Root directory of the Tico frontend on the SD card. Everything the
+        // sync feature writes lands under it, mirroring Tico's real folder
+        // layout: <base>/roms/<platform>/, <base>/saves/<platform>/ and
+        // <base>/assets/covers/<platform>/. Configurable in config.json
+        // ("tico_base_dir"), defaults to "sdmc:/tico/".
+        const std::string& GetTicoBaseDir() const { return tico_base_dir; }
+        void SetTicoBaseDir(const std::string& dir);
+        std::string GetTicoRomPath(const std::string& romm_slug) const;
+        std::string GetTicoSavePath(const std::string& romm_slug) const;
+        std::string GetTicoCoverPath(const std::string& romm_slug) const;
+
         // --- Platform visibility (Settings > Platforms) -------------------
         // Purely a UI filter over the platform browser: nothing here touches
         // ROM files, installed_index.json, download paths, covers or cache.
@@ -239,6 +251,9 @@ namespace romm::model {
         // Root under which every platform's games live, one subfolder per
         // system ("roms/" + slug). Always ends in '/'.
         std::string roms_base_dir = "sdmc:/romm-nx/";
+
+        // Root of the Tico frontend. Always ends in '/'.
+        std::string tico_base_dir = "sdmc:/tico/";
 
         // Directory holding the per-channel subdirectories; always ends in '/'.
         std::string update_base_url = "https://romm-nx.aaaoz.fr/romm-nx/";

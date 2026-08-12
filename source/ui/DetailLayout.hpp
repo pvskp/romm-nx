@@ -106,6 +106,8 @@ namespace romm::ui {
         pu::sdl2::Texture tex_btn_confirm_uninstall = nullptr;
         pu::sdl2::Texture tex_btn_add_to_queue = nullptr;
         pu::sdl2::Texture tex_btn_remove_from_queue = nullptr;
+
+        pu::sdl2::Texture tex_btn_sync = nullptr;
         
         pu::sdl2::Texture dynamic_download_tex = nullptr;
         std::string current_dynamic_text;

@@ -3,6 +3,7 @@
 #include "JsonUtil.hpp"
 #include "DataModel.hpp"
 #include "PlatformCatalog.hpp"
+#include "TicoCatalog.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdio>
 #include <iostream>
@@ -194,6 +195,25 @@ namespace romm::model {
 
     std::string ConfigManager::GetRomPath(const std::string& platform) const {
         return roms_base_dir + "roms/" + NormalizePlatformSlug(platform) + "/";
+    }
+
+    void ConfigManager::SetTicoBaseDir(const std::string& dir) {
+        tico_base_dir = dir;
+        if (!tico_base_dir.empty() && tico_base_dir.back() != '/') {
+            tico_base_dir += "/";
+        }
+    }
+
+    std::string ConfigManager::GetTicoRomPath(const std::string& romm_slug) const {
+        return tico_base_dir + "roms/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoSavePath(const std::string& romm_slug) const {
+        return tico_base_dir + "saves/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoCoverPath(const std::string& romm_slug) const {
+        return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
     }
 
     bool ConfigManager::Load() {
@@ -417,6 +437,16 @@ namespace romm::model {
             }
         }
 
+        // Tico base directory. Absent on configs written before this feature —
+        // then the constructor default ("sdmc:/tico/") stands.
+        std::string tico_dir;
+        if (jsonExtractString(content, "tico_base_dir", tico_dir) && !tico_dir.empty()) {
+            SetTicoBaseDir(tico_dir);
+            if (!romm::model::RomPathManager::ValidatePath(tico_base_dir)) {
+                tico_base_dir = "sdmc:/tico/";
+            }
+        }
+
         is_valid = true;
         error_message = "";
 
@@ -480,6 +510,7 @@ namespace romm::model {
         content += "    \"api_key\": \"" + api_key + "\"\n";
         content += "  },\n";
         content += "  \"roms_base_dir\": \"" + roms_base_dir + "\",\n";
+        content += "  \"tico_base_dir\": \"" + tico_base_dir + "\",\n";
         content += "  \"cache\": {\n";
         content += "    \"auto_clear_enabled\": " + std::string(auto_clear_enabled ? "true" : "false") + ",\n";
         content += "    \"max_size_mb\": " + std::to_string(max_size_mb) + ",\n";

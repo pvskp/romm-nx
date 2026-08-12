@@ -6,6 +6,7 @@
 #include "CoverProfile.hpp"
 #include "CoverCache.hpp"
 #include "UninstallConfirmModal.hpp"
+#include "SyncModal.hpp"
 #include "../model/RommApi.hpp"
 #include "../model/ConfigManager.hpp"
 #include "../i18n/I18n.hpp"
@@ -377,6 +378,8 @@ namespace romm::ui {
         tex_btn_add_to_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.add_to_queue"), text_color);
         tex_btn_remove_from_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.remove_from_queue"), text_color);
 
+        tex_btn_sync = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.sync"), text_color);
+
         details_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.details"), text_color);
         save_data_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.save_data"), text_color);
         mods_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.mods"), text_color);
@@ -405,6 +408,7 @@ namespace romm::ui {
         if (tex_btn_confirm_uninstall) { pu::ui::render::DeleteTexture(tex_btn_confirm_uninstall); tex_btn_confirm_uninstall = nullptr; }
         if (tex_btn_add_to_queue) { pu::ui::render::DeleteTexture(tex_btn_add_to_queue); tex_btn_add_to_queue = nullptr; }
         if (tex_btn_remove_from_queue) { pu::ui::render::DeleteTexture(tex_btn_remove_from_queue); tex_btn_remove_from_queue = nullptr; }
+        if (tex_btn_sync) { pu::ui::render::DeleteTexture(tex_btn_sync); tex_btn_sync = nullptr; }
 
         if (dynamic_download_tex) { pu::ui::render::DeleteTexture(dynamic_download_tex); dynamic_download_tex = nullptr; }
 
@@ -676,12 +680,14 @@ namespace romm::ui {
         s32 btn_x = cover_x; // 190
 
         bool actions_focused = (nav->GetDetailFocus() == romm::navigation::DetailFocus::Actions);
+        const size_t selected_action_idx = nav->GetSelectedDetailActionIdx();
 
         pu::ui::Color btn_bg(16, 18, 22, 255); // Web Dark Slate (#101216)
         pu::ui::Color btn_border;
         s32 btn_border_w = 0;
 
-        if (actions_focused) {
+        bool download_focused = actions_focused && selected_action_idx == 0;
+        if (download_focused) {
             btn_border = pu::ui::Color(230, 199, 167, 255); // Cream (#E6C7A7)
             btn_border_w = 4;
         } else {
@@ -739,8 +745,6 @@ namespace romm::ui {
 
             current_action_state = ComputeDownloadActionState(rom_id, platform_slug, model->GetCachedDetail(rom_id));
 
-            bool is_ps1 = ctx.is_ps1;
-
             if (current_action_state == DownloadActionState::Uninstall) {
                 active_btn_tex = tex_btn_uninstall;
             } else if (current_action_state == DownloadActionState::Downloading) {
@@ -796,6 +800,38 @@ namespace romm::ui {
             s32 tw = pu::ui::render::GetTextureWidth(active_btn_tex);
             s32 th = pu::ui::render::GetTextureHeight(active_btn_tex);
             drawer->RenderTexture(active_btn_tex, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
+        }
+
+        // Sync button, to the right of the download action.
+        {
+            const s32 sync_gap = 20;
+            s32 sync_x = btn_x + btn_w + sync_gap;
+            const s32 sync_w = 430;
+            const s32 sync_h = btn_h;
+
+            bool sync_focused = actions_focused && selected_action_idx == 1;
+            pu::ui::Color sync_border;
+            s32 sync_border_w = 0;
+            if (sync_focused) {
+                sync_border = pu::ui::Color(230, 199, 167, 255);
+                sync_border_w = 4;
+            } else {
+                sync_border = pu::ui::Color(230, 199, 167, 100);
+                sync_border_w = 2;
+            }
+
+            drawer->RenderRoundedRectangleFill(sync_border, sync_x, btn_y, sync_w, sync_h, 8);
+            drawer->RenderRoundedRectangleFill(btn_bg, sync_x + sync_border_w, btn_y + sync_border_w,
+                                               sync_w - (sync_border_w * 2), sync_h - (sync_border_w * 2), 6);
+
+            // Mirror the download button's dynamic state into this rendered
+            // button next frame via texture reuse: keep it simple, the modal
+            // carries the per-stage detail.
+            if (tex_btn_sync) {
+                s32 tw = pu::ui::render::GetTextureWidth(tex_btn_sync);
+                s32 th = pu::ui::render::GetTextureHeight(tex_btn_sync);
+                drawer->RenderTexture(tex_btn_sync, sync_x + (sync_w - tw) / 2, btn_y + (sync_h - th) / 2);
+            }
         }
 
         // Draw Progress Bar if needed
@@ -1052,6 +1088,11 @@ namespace romm::ui {
         hint_text->SetFont("Ubuntu@30");
         hint_text->SetColor(pu::ui::Color(190, 180, 225, 255));
         this->Add(hint_text);
+
+        // Fullscreen overlay: added last so it draws above every other
+        // element of the layout, dim included.
+        auto sync_modal = romm::ui::SyncModal::New(nav);
+        this->Add(sync_modal);
     }
 
     void DetailLayout::RefreshTranslations() {

@@ -1,6 +1,7 @@
 #include "NavigationManager.hpp"
 #include "../model/ConfigManager.hpp"
 #include "../model/DownloadManager.hpp"
+#include "../model/SyncManager.hpp"
 #include "../ui/MainMenuLayout.hpp"
 #include "../ui/LibraryLayout.hpp"
 #include "../ui/GameGrid.hpp"
@@ -216,6 +217,38 @@ namespace romm::navigation {
         }
     }
 
+    void NavigationManager::HandleSyncModalInput(u64 keys_down) {
+        if (!sync_modal_active) return;
+
+        auto& sync = romm::model::SyncManager::Instance();
+        const auto snap = sync.GetSnapshot();
+
+        if (snap.conflict.active) {
+            if (keys_down & HidNpadButton_Up) {
+                if (sync_conflict_selected_idx > 0) sync_conflict_selected_idx--;
+            } else if (keys_down & HidNpadButton_Down) {
+                if (sync_conflict_selected_idx + 1 < 3) sync_conflict_selected_idx++;
+            } else if (keys_down & HidNpadButton_A) {
+                if (sync_conflict_selected_idx == 0) {
+                    sync.ResolveConflict(true);   // local wins -> upload
+                } else if (sync_conflict_selected_idx == 1) {
+                    sync.ResolveConflict(false);  // server wins -> download
+                } else {
+                    sync.SkipConflict();
+                }
+                sync_conflict_selected_idx = 0;
+            } else if (keys_down & HidNpadButton_B) {
+                // Closing/cancelling the prompt skips this save.
+                sync.SkipConflict();
+                sync_conflict_selected_idx = 0;
+            }
+        } else {
+            if (keys_down & HidNpadButton_B) {
+                sync_modal_active = false;
+            }
+        }
+    }
+
     void NavigationManager::HandleLibraryMenuInput(u64 keys_down) {
         if (!library_menu_active) return;
 
@@ -397,6 +430,11 @@ namespace romm::navigation {
         // Block all background input if modal is active
         if (uninstall_modal.active) {
             HandleUninstallModalInput(keys_down);
+            return;
+        }
+
+        if (sync_modal_active) {
+            HandleSyncModalInput(keys_down);
             return;
         }
 
@@ -1032,21 +1070,39 @@ namespace romm::navigation {
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Cover" << std::endl;
                 }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    detail_focus = DetailFocus::Tabs;
-                    selected_detail_tab_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Tabs" << std::endl;
+                // Left/Right cycle between the two action buttons
+                // (0 = Download, 1 = Sync); Tabs is reached via Cover -> Right.
+                else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    if (selected_detail_action_idx > 0) {
+                        selected_detail_action_idx--;
+                        state_changed = true;
+                        std::cout << "[NAV] [DETAIL ACTION] Selected action: " << selected_detail_action_idx << std::endl;
+                    }
                 }
-                // A on download action - single press only
+                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    if (selected_detail_action_idx + 1 < 2) {
+                        selected_detail_action_idx++;
+                        state_changed = true;
+                        std::cout << "[NAV] [DETAIL ACTION] Selected action: " << selected_detail_action_idx << std::endl;
+                    }
+                }
+                // A on the selected action - single press only
                 else if (keys_down & HidNpadButton_A) {
                     std::cout << "[NAV] [A PRESS] Triggered detail action" << std::endl;
-                    
+
                     if (detail_layout) {
                         int rom_id = detail_layout->ctx.rom_id;
                         const auto* detail = model->GetCachedDetail(rom_id);
-                        if (detail) {
+                        if (!detail) {
+                            std::cerr << "[NAV] Detail not loaded yet." << std::endl;
+                        } else if (selected_detail_action_idx == 1) {
+                            // Sync: ROM + saves + cover to the Tico folders.
+                            romm::model::SyncManager::Instance().StartSync(
+                                *detail, detail_layout->ctx.platform_slug, detail_layout->ctx.title);
+                            sync_modal_active = true;
+                            sync_conflict_selected_idx = 0;
+                            std::cout << "[NAV] [SYNC] Sync modal opened for rom_id=" << rom_id << std::endl;
+                        } else {
                             auto& dl_mgr = romm::model::DownloadManager::Instance();
                             auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
 
@@ -1074,8 +1130,6 @@ namespace romm::navigation {
                                     dl_mgr.EnqueueDownload(*detail, detail_layout->ctx.platform_slug, detail_layout->ctx.title);
                                 }
                             }
-                        } else {
-                            std::cerr << "[NAV] Detail not loaded yet." << std::endl;
                         }
                     }
                 }
