@@ -142,6 +142,11 @@ namespace romm::ui {
                       const s32 x, const s32 y) override;
         void OnInput(const u64, const u64, const u64, const pu::ui::TouchPoint) override {}
 
+        // Downloads every missing cover of the loaded platform at Low
+        // priority, so the whole collection shows art in the Games section
+        // without scrolling (covers already in the cache are no-ops).
+        void PrefetchAllCovers();
+
         PU_SMART_CTOR(GameGrid)
     };
 

@@ -365,6 +365,85 @@ namespace romm::navigation {
         }
     }
 
+    void NavigationManager::PreviewPlatform(size_t platform_idx) {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[platform_idx];
+
+        const bool platform_changed = (loaded_platform_idx != platform_idx);
+        loaded_platform_idx = platform_idx;
+        if (platform_changed) {
+            selected_game_idx = 0;
+            selected_letter_idx = 0;
+            ClearSearch();
+            ClearBulkSelection();
+        }
+
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+            std::cout << "[NAV] [PREVIEW] Loading " << plat.name << std::endl;
+        } else {
+            std::cout << "[NAV] [PREVIEW] " << plat.name << " (cached, "
+                      << plat.games.size() << " games)" << std::endl;
+        }
+    }
+
+    void NavigationManager::MarkSelectedPlatform() {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (selected_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[selected_platform_idx];
+
+        if (plat.games.empty()) {
+            // ROMs not fetched yet: load the platform and auto-mark every
+            // game when the fetch lands (see ConsumePendingMarkPlatform).
+            pending_mark_platform = true;
+            pending_mark_platform_id = plat.id;
+            loaded_platform_idx = selected_platform_idx;
+            selected_game_idx = 0;
+            selected_letter_idx = 0;
+            ClearSearch();
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+            std::cout << "[NAV] [X] Marking platform (auto-mark on load): " << plat.name << std::endl;
+            return;
+        }
+
+        // Toggle all-or-nothing for the whole collection.
+        bool all_marked = true;
+        for (const auto& g : plat.games) {
+            if (!IsBulkSelected(g.id)) {
+                all_marked = false;
+                break;
+            }
+        }
+        for (const auto& g : plat.games) {
+            if (all_marked) {
+                bulk_selection.erase(g.id);
+            } else {
+                bulk_selection.insert(g.id);
+            }
+        }
+        loaded_platform_idx = selected_platform_idx;
+        std::cout << "[NAV] [X] " << (all_marked ? "Unmarked" : "Marked") << " all "
+                  << plat.games.size() << " games of " << plat.name << std::endl;
+    }
+
+    bool NavigationManager::ConsumePendingMarkPlatform(const std::string& platform_id,
+                                                       const std::vector<romm::model::Game>& games) {
+        if (!pending_mark_platform || pending_mark_platform_id != platform_id) return false;
+        pending_mark_platform = false;
+        pending_mark_platform_id.clear();
+        for (const auto& g : games) {
+            bulk_selection.insert(g.id);
+        }
+        std::cout << "[NAV] [X] Auto-marked " << games.size()
+                  << " games of platform " << platform_id << std::endl;
+        return true;
+    }
+
     void NavigationManager::OpenPlatformSyncOptions() {
         if (!model) return;
         const auto& platforms = model->GetPlatforms();
@@ -441,6 +520,8 @@ namespace romm::navigation {
         // The platform list is about to change shape; a focus parked on the
         // bottom sync button would point at nothing.
         library_platform_sync_focused = false;
+        pending_mark_platform = false;
+        pending_mark_platform_id.clear();
 
         // Anchor on platform ids, not indices: the filter reorders the list, so
         // an index that was valid a moment ago can point at a different
@@ -650,6 +731,8 @@ namespace romm::navigation {
                     library_focus = LibraryFocus::Sidebar; // Reset focus to sidebar
                     state_changed = true;
                     app->LoadLayout(library_layout);
+                    // Sidebar hover preview shows the first platform right away.
+                    PreviewPlatform(0);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Library Screen" << std::endl;
                 } else if (selected_menu_idx == 1) { // Installed
                     current_screen = Screen::Installed;
@@ -725,13 +808,13 @@ namespace romm::navigation {
             // selection. Only meaningful once a game is actually highlighted,
             // so it's ignored while the sidebar or alphabet bar has focus.
             if (keys_down & HidNpadButton_X) {
-                // Works from the sidebar as well: the library lands on the
-                // sidebar when opened, and a mark that only responds after
-                // moving focus onto the grid reads as "X is broken".
-                const bool on_a_game = (library_focus == LibraryFocus::Grid ||
-                                        library_focus == LibraryFocus::Panel ||
-                                        library_focus == LibraryFocus::Sidebar);
-                if (on_a_game && selected_game_idx < filtered_count) {
+                if (library_focus == LibraryFocus::Sidebar && !library_platform_sync_focused) {
+                    // X on the sidebar marks the whole platform under the
+                    // cursor (loading it first if needed) — not just one game.
+                    MarkSelectedPlatform();
+                    state_changed = true;
+                } else if ((library_focus == LibraryFocus::Grid || library_focus == LibraryFocus::Panel) &&
+                           selected_game_idx < filtered_count) {
                     ToggleBulkSelection(current_platform.games[filtered_indices[selected_game_idx]].id);
                     state_changed = true;
                 }
@@ -771,6 +854,7 @@ namespace romm::navigation {
                         std::cout << "[NAV] Focus: Sync Platform button -> last platform" << std::endl;
                     } else if (selected_platform_idx > 0) {
                         selected_platform_idx--;
+                        PreviewPlatform(selected_platform_idx);
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
                     }
@@ -780,6 +864,7 @@ namespace romm::navigation {
                         // Already on the button; stay put.
                     } else if (selected_platform_idx + 1 < platforms.size()) {
                         selected_platform_idx++;
+                        PreviewPlatform(selected_platform_idx);
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
                     } else {
@@ -796,19 +881,31 @@ namespace romm::navigation {
                         OpenPlatformSyncOptions();
                         state_changed = true;
                     } else {
+                        // Marks (and search/filter state) only reset when
+                        // actually switching platforms: re-pressing A on the
+                        // same platform keeps a bulk selection made from the
+                        // sidebar instead of silently clearing it.
+                        const bool platform_changed = (loaded_platform_idx != selected_platform_idx);
                         loaded_platform_idx = selected_platform_idx;
-                        selected_game_idx = 0;
-                        selected_letter_idx = 0;
-                        // The query was scoped to the platform being left; carrying
-                        // it over would silently hide most of the new one. Same for
-                        // the bulk selection — invisible ids from another platform.
-                        ClearSearch();
-                        ClearBulkSelection();
+                        if (platform_changed) {
+                            selected_game_idx = 0;
+                            selected_letter_idx = 0;
+                            // The query was scoped to the platform being left;
+                            // carrying it over would silently hide most of the
+                            // new one. Same for the bulk selection — invisible
+                            // ids from another platform.
+                            ClearSearch();
+                            ClearBulkSelection();
+                        }
                         std::cout << "[PERF] Platform selected: " << platforms.at(selected_platform_idx).name << std::endl;
                         std::cout << "[LIBRARY] Platform changed to " << platforms.at(selected_platform_idx).name << "/" << platforms.at(selected_platform_idx).slug << std::endl;
 
-                        auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                        main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
+                        // The hover preview may have loaded it already; only
+                        // fetch when the collection isn't cached yet.
+                        if (platforms.at(selected_platform_idx).games.empty()) {
+                            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+                            main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
+                        }
 
                         if (ShowAlphabetFilter()) {
                             library_focus = LibraryFocus::Alphabet;

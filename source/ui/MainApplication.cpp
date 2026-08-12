@@ -301,6 +301,20 @@ namespace romm::ui {
             auto lib_lyt = nav_mgr->GetLibraryLayout();
             if (lib_lyt) {
                 lib_lyt->OnSelectionUpdated();
+
+                // A fresh ROMs result also (re)runs the two background
+                // downloaders for the loaded platform: the platform-wide cover
+                // prefetch so the Games section shows art without scrolling,
+                // and — when X was pressed on an unloaded platform in the
+                // sidebar — the pending auto-mark of the whole collection.
+                if (!req->games.empty()) {
+                    if (auto grid = lib_lyt->GetGameGrid()) {
+                        grid->PrefetchAllCovers();
+                    }
+                    if (nav_mgr->ConsumePendingMarkPlatform(std::to_string(plat_id), req->games)) {
+                        lib_lyt->OnSelectionUpdated();
+                    }
+                }
             }
         }
 

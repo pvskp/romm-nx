@@ -265,6 +265,13 @@ namespace romm::navigation {
         // Sidebar bottom "Sync Platform" button focus (direct library option).
         bool IsLibraryPlatformSyncFocused() const { return library_platform_sync_focused; }
 
+        // Consumes a pending "mark the whole platform" request (X pressed on
+        // an unloaded platform in the sidebar). Called after that platform's
+        // ROMs land; marks every game and returns whether it fired. Used by
+        // MainApplication once per completed ROMs fetch.
+        bool ConsumePendingMarkPlatform(const std::string& platform_id,
+                                        const std::vector<romm::model::Game>& games);
+
         // Library Y-Menu controls
         bool IsLibraryMenuActive() const { return library_menu_active; }
         size_t GetLibraryMenuSelectedIdx() const { return library_menu_selected_idx; }
@@ -289,8 +296,22 @@ namespace romm::navigation {
         // collection (all loaded games). Shared by the sidebar button.
         void OpenPlatformSyncOptions();
 
+        // X on the sidebar: mark/unmark every game of the platform under the
+        // cursor. If its ROMs aren't fetched yet, loads it and auto-marks
+        // everything when the fetch lands (ConsumePendingMarkPlatform).
+        void MarkSelectedPlatform();
+
+        // Sidebar hover preview: switching the cursor to another platform
+        // shows its collection right away (background fetch on first hover).
+        // Unlike the A handler this never moves focus off the sidebar.
+        void PreviewPlatform(size_t platform_idx);
+
         // Sidebar bottom "Sync Platform" button focus (direct library option).
         bool library_platform_sync_focused = false;
+
+        // Pending auto-mark request (see MarkSelectedPlatform).
+        bool pending_mark_platform = false;
+        std::string pending_mark_platform_id;
     };
 
 }
