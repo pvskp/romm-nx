@@ -237,7 +237,35 @@ namespace romm::ui {
         void UpdateFooterHints();
         std::shared_ptr<DetailCard> GetCard() { return card; }
 
+        // Scroll state of the description, read by the overflow tip element.
+        int GetDescriptionScrollOffset() const { return descriptionScrollOffset; }
+        int GetMaxDescriptionScrollOffset() const { return maxDescriptionScrollOffset; }
+
         PU_SMART_CTOR(DetailLayout)
+    };
+
+    // Floating scroll hint for the description area: a down chevron when
+    // there is more text below the fold, an up chevron once the user has
+    // scrolled. Drawn on top of the description text block, at the right
+    // edge of the wrap area. Renders nothing when the text fits.
+    class DescriptionScrollTip : public pu::ui::elm::Element {
+    private:
+        s32 x, y, w, h;
+        DetailLayout* layout;
+
+    public:
+        DescriptionScrollTip(s32 x, s32 y, s32 w, s32 h, DetailLayout* layout)
+            : Element::Element(), x(x), y(y), w(w), h(h), layout(layout) {}
+
+        s32 GetX() override { return x; }
+        s32 GetY() override { return y; }
+        s32 GetWidth() override { return w; }
+        s32 GetHeight() override { return h; }
+
+        void OnRender(pu::ui::render::Renderer::Ref& drawer, const s32 x_coord, const s32 y_coord) override;
+        void OnInput(const u64 keys_down, const u64 keys_up, const u64 keys_held, const pu::ui::TouchPoint touch_pos) override {}
+
+        PU_SMART_CTOR(DescriptionScrollTip)
     };
 
     enum class FullscreenMode {

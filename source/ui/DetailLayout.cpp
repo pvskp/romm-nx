@@ -63,6 +63,67 @@ namespace romm::ui {
         constexpr s32 SECTION_TITLE_TO_CONTENT_GAP = 15; // 8-12px at 720p scaled by 1.5 -> ~15px
     }
 
+    // Fills an arbitrary triangle by scanline: for each pixel row the edges
+    // that straddle it give the covered x-span, drawn as a 1px rectangle.
+    // The renderer has no polygon primitive, so this is the cheap way to get
+    // chevron arrows for the description scroll hint.
+    static void FillTriangle(pu::ui::render::Renderer::Ref& drawer,
+                             s32 x1, s32 y1, s32 x2, s32 y2, s32 x3, s32 y3,
+                             pu::ui::Color color) {
+        const s32 min_y = std::min(y1, std::min(y2, y3));
+        const s32 max_y = std::max(y1, std::max(y2, y3));
+        if (min_y == max_y) return;
+
+        for (s32 y = min_y; y <= max_y; ++y) {
+            s32 span_min = 0x7FFFFFFF;
+            s32 span_max = -0x7FFFFFFF;
+            const s32 edges[3][4] = {
+                { x1, y1, x2, y2 },
+                { x2, y2, x3, y3 },
+                { x3, y3, x1, y1 }
+            };
+            for (int e = 0; e < 3; ++e) {
+                const s32 ax = edges[e][0], ay = edges[e][1];
+                const s32 bx = edges[e][2], by = edges[e][3];
+                if (ay == by) continue; // horizontal edge: no span info
+                if ((y < ay && y < by) || (y > ay && y > by)) continue;
+                const s32 ex = ax + (s32)(((int64_t)(y - ay) * (bx - ax)) / (by - ay));
+                if (ex < span_min) span_min = ex;
+                if (ex > span_max) span_max = ex;
+            }
+            if (span_min <= span_max) {
+                drawer->RenderRectangleFill(color, span_min, y, span_max - span_min + 1, 1);
+            }
+        }
+    }
+
+    void DescriptionScrollTip::OnRender(pu::ui::render::Renderer::Ref& drawer,
+                                        const s32 x_coord, const s32 y_coord) {
+        if (!layout) return;
+        const int max_off = layout->GetMaxDescriptionScrollOffset();
+        if (max_off <= 0) return; // description fits: nothing to hint
+        const int off = layout->GetDescriptionScrollOffset();
+
+        const pu::ui::Color color(230, 199, 167, 255);
+
+        // One chevron per direction, stacked at the right edge of the wrap
+        // area and vertically centred on the description window. Down hints
+        // there is more text below; up hints the user can scroll back.
+        const s32 chev_w = 16;
+        const s32 chev_h = 10;
+        const s32 cx = x_coord + w - chev_w - 6;
+        const s32 cy = y_coord + h / 2;
+
+        if (off > 0) {
+            // Up chevron (triangle pointing up).
+            FillTriangle(drawer, cx, cy + chev_h, cx + chev_w, cy + chev_h, cx + chev_w / 2, cy, color);
+        }
+        if (off < max_off) {
+            // Down chevron (triangle pointing down), 14px below the up one.
+            FillTriangle(drawer, cx, cy + 14, cx + chev_w, cy + 14, cx + chev_w / 2, cy + 14 + chev_h, color);
+        }
+    }
+
 
     static std::vector<std::string> WordWrapLinesPixel(const std::string& font_name, const std::string& text, s32 max_width_px) {
         std::vector<std::string> lines;
@@ -876,6 +937,17 @@ namespace romm::ui {
         desc_text->SetFont("Ubuntu@30");
         desc_text->SetColor(pu::ui::Color(237, 229, 251, 255));
         this->Add(desc_text);
+
+        // Scroll tip for the description (chevron arrows): drawn after the
+        // text block so it sits on top; renders nothing when the text fits.
+        // The element is wider than the wrap area so the chevrons land in
+        // the card's right margin, clear of the text.
+        {
+            const s32 desc_bottom = 750;
+            auto tip = DescriptionScrollTip::New(660, section_content_y, 1060,
+                                                 desc_bottom - section_content_y, this);
+            this->Add(tip);
+        }
 
         // Trailer Link block (Ubuntu, Light Lavender, moved down to x=660, y=780)
         trailer_title_text = pu::ui::elm::TextBlock::New(660, 780, "");
