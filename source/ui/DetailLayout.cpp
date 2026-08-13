@@ -380,8 +380,6 @@ namespace romm::ui {
 
         tex_btn_sync = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.sync"), text_color);
 
-        details_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.details"), text_color);
-
         cover_placeholder_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.no_image"), text_color);
         loading_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.loading"), text_color);
     }
@@ -409,7 +407,6 @@ namespace romm::ui {
 
         if (dynamic_download_tex) { pu::ui::render::DeleteTexture(dynamic_download_tex); dynamic_download_tex = nullptr; }
 
-        if (details_tex) { pu::ui::render::DeleteTexture(details_tex); details_tex = nullptr; }
         if (cover_placeholder_tex) { pu::ui::render::DeleteTexture(cover_placeholder_tex); cover_placeholder_tex = nullptr; }
         if (loading_tex) { pu::ui::render::DeleteTexture(loading_tex); loading_tex = nullptr; }
         if (title_tex) { pu::ui::render::DeleteTexture(title_tex); title_tex = nullptr; }
@@ -716,52 +713,6 @@ namespace romm::ui {
             s32 tw = pu::ui::render::GetTextureWidth(tex_btn_sync);
             s32 th = pu::ui::render::GetTextureHeight(tex_btn_sync);
             drawer->RenderTexture(tex_btn_sync, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
-        }
-
-        // Tabs Row (4 tabs)
-        s32 tab_x_start = x_coord + 510;
-        s32 tab_y = y_coord + TAB_Y_OFFSET;
-        s32 tab_w = 240;
-        s32 tab_h = TAB_HEIGHT;
-        s32 tab_spacing = 20;
-
-        bool tabs_focused = (nav->GetDetailFocus() == romm::navigation::DetailFocus::Tabs);
-        size_t selected_tab_idx = nav->GetSelectedDetailTabIdx();
-
-        for (size_t i = 0; i < DetailCard::GetTabCount(); ++i) {
-            s32 tx = tab_x_start + i * (tab_w + tab_spacing);
-            bool is_active_tab = (i == selected_tab_idx);
-
-            pu::ui::Color t_bg;
-            pu::ui::Color t_border;
-            s32 t_border_w = 0;
-
-            if (is_active_tab) {
-                t_bg = pu::ui::Color(85, 63, 152, 255); // Violet highlight capsule (#553F98)
-                if (tabs_focused) {
-                    t_border = pu::ui::Color(230, 199, 167, 255); // Cream border
-                    t_border_w = 3;
-                }
-            } else {
-                t_bg = pu::ui::Color(16, 18, 22, 255); // Web Dark Slate (#101216)
-                t_border = pu::ui::Color(45, 50, 62, 255); // Slate Border Grey (#2D323E)
-                t_border_w = 2;
-            }
-
-            if (t_border_w > 0) {
-                drawer->RenderRoundedRectangleFill(t_border, tx, tab_y, tab_w, tab_h, 8);
-                drawer->RenderRoundedRectangleFill(t_bg, tx + t_border_w, tab_y + t_border_w, tab_w - (t_border_w * 2), tab_h - (t_border_w * 2), 6);
-            } else {
-                drawer->RenderRoundedRectangleFill(t_bg, tx, tab_y, tab_w, tab_h, 8);
-            }
-
-            pu::sdl2::Texture tab_tex = details_tex;
-
-            if (tab_tex) {
-                s32 tw = pu::ui::render::GetTextureWidth(tab_tex);
-                s32 th = pu::ui::render::GetTextureHeight(tab_tex);
-                drawer->RenderTexture(tab_tex, tx + (tab_w - tw) / 2, tab_y + (tab_h - th) / 2);
-            }
         }
 
         // Render Game Title with Marquee Scrolling
@@ -1108,26 +1059,14 @@ namespace romm::ui {
         auto nav = nav_mgr.lock();
         if (!nav) return;
 
-        bool has_image = false;
-        if (card && card->GetCoverTexture() != nullptr &&
-            card->GetCoverState() != DetailCoverState::Placeholder &&
-            card->GetCoverState() != DetailCoverState::Failed) {
-            has_image = true;
-        }
-
         auto focus = nav->GetDetailFocus();
 
-        // Four whole hint lines rather than a base string with translated
+        // Two whole hint lines rather than a base string with translated
         // prefixes/suffixes glued on: which segments appear, and in what order,
         // is a property of the sentence and belongs to the translator.
-        const char* key = "hint.detail.cover";
-        if (focus != romm::navigation::DetailFocus::Cover) {
-            const bool scrollable = (maxDescriptionScrollOffset > 0);
-            key = (has_image && scrollable) ? "hint.detail.panel_image_scroll"
-                : (has_image)               ? "hint.detail.panel_image"
-                : (scrollable)              ? "hint.detail.panel_scroll"
-                                            : "hint.detail.panel";
-        }
+        const char* key = (focus == romm::navigation::DetailFocus::Cover)
+                              ? "hint.detail.cover"
+                              : "hint.detail.panel";
 
         hint_text->SetText(romm::i18n::tr(key));
     }
@@ -1161,7 +1100,11 @@ namespace romm::ui {
 
     void FullscreenImageElement::SetKeys(const FullscreenKeys& new_keys) {
         keys = new_keys;
-        if (keys.miximage_key.rom_id > 0 && !keys.miximage_key.cover_source.empty()) {
+        // Open on the cover, matching the detail card's default image; the
+        // miximage is only reached by cycling (L/R or R analog stick).
+        if (keys.large_key.rom_id > 0 && !keys.large_key.cover_source.empty()) {
+            current_mode = FullscreenMode::LargeCover;
+        } else if (keys.miximage_key.rom_id > 0 && !keys.miximage_key.cover_source.empty()) {
             current_mode = FullscreenMode::MixImage;
         } else {
             current_mode = FullscreenMode::LargeCover;

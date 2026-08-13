@@ -89,7 +89,6 @@ namespace romm::ui {
         s32 x, y, w, h;
         std::weak_ptr<romm::navigation::NavigationManager> nav_mgr;
 
-        pu::sdl2::Texture details_tex = nullptr;
         pu::sdl2::Texture cover_placeholder_tex = nullptr;
         pu::sdl2::Texture loading_tex = nullptr;
 
@@ -176,11 +175,10 @@ namespace romm::ui {
         // stick on the Detail screen — never automatic.
         void ToggleImageMode();
 
-        // Single source of truth for the tab count (only Details remains —
-        // Save Data / Mods / Cheats had no functionality) — OnRender's tab
-        // strip and NavigationManager's Right-navigation clamp both size
-        // against this instead of independently hardcoding the same number.
-        static constexpr size_t GetTabCount() { return 1; }
+        // The card's right panel renders its content directly — there is no
+        // tab strip anymore (Save Data / Mods / Cheats / Details buttons were
+        // all non-functional). TAB_Y_OFFSET/TAB_HEIGHT still anchor the
+        // section geometry below.
 
         DetailCard(s32 x, s32 y, s32 w, s32 h, std::shared_ptr<romm::navigation::NavigationManager> nav);
         ~DetailCard() override;

@@ -122,8 +122,8 @@ namespace romm::navigation {
     NavigationManager::NavigationManager(pu::ui::Application* app, std::shared_ptr<romm::model::DataModel> model)
         : app(app), model(model), current_screen(Screen::MainMenu), library_focus(LibraryFocus::Sidebar),
           selected_menu_idx(0), selected_platform_idx(0), loaded_platform_idx(0), selected_game_idx(0),
-          selected_letter_idx(0), detail_focus(DetailFocus::Tabs),
-          selected_detail_tab_idx(0), selected_detail_action_idx(0),
+          selected_letter_idx(0), detail_focus(DetailFocus::Cover),
+          selected_detail_action_idx(0),
           repeat_held_button(0),
           repeat_start_time(std::chrono::high_resolution_clock::now()),
           repeat_last_time(std::chrono::high_resolution_clock::now()),
@@ -951,8 +951,7 @@ namespace romm::navigation {
                     }
                     else if (selected_game_idx < filtered_count) {
                         current_screen = Screen::Detail;
-                        detail_focus = DetailFocus::Tabs;
-                        selected_detail_tab_idx = 0;
+                        detail_focus = DetailFocus::Cover;
                         selected_detail_action_idx = 0;
                         state_changed = true;
                         
@@ -1118,9 +1117,9 @@ namespace romm::navigation {
             else if ((keys_effective & HidNpadButton_StickRUp) || (keys_effective & HidNpadButton_ZL)) {
                 if (detail_layout) detail_layout->ScrollDescription(-1);
             }
-            // R-Stick left/right switches the card image between the cover
-            // and the game screenshot (miximage) — never automatic.
-            else if ((keys_down & HidNpadButton_StickRLeft) || (keys_down & HidNpadButton_StickRRight)) {
+            // R/L switches the card image between the cover and the game
+            // screenshot (miximage) — never automatic.
+            else if ((keys_down & HidNpadButton_R) || (keys_down & HidNpadButton_L)) {
                 if (detail_layout && detail_layout->GetCard()) {
                     detail_layout->GetCard()->ToggleImageMode();
                 }
@@ -1135,35 +1134,6 @@ namespace romm::navigation {
                 std::cout << "[NAV] [B PRESS] B pressed in detail view: returning to Library" << std::endl;
                 std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Detail Screen -> Library Screen" << std::endl;
             }
-            else if (detail_focus == DetailFocus::Tabs) {
-                if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                    if (selected_detail_tab_idx > 0) {
-                        selected_detail_tab_idx--;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL TAB CHANGE] Selected detail tab: " << selected_detail_tab_idx << std::endl;
-                    } else {
-                        // Left on first tab -> go to Cover
-                        detail_focus = DetailFocus::Cover;
-                        state_changed = true;
-                        if (detail_layout) detail_layout->UpdateFooterHints();
-                        std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> Cover" << std::endl;
-                    }
-                }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    if (selected_detail_tab_idx + 1 < romm::ui::DetailCard::GetTabCount()) {
-                        selected_detail_tab_idx++;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL TAB CHANGE] Selected detail tab: " << selected_detail_tab_idx << std::endl;
-                    }
-                }
-                else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    detail_focus = DetailFocus::Actions;
-                    selected_detail_action_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> Download Button" << std::endl;
-                }
-            }
             else if (detail_focus == DetailFocus::Cover) {
                 if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
                     detail_focus = DetailFocus::Actions;
@@ -1171,13 +1141,6 @@ namespace romm::navigation {
                     state_changed = true;
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Cover -> Actions" << std::endl;
-                }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    detail_focus = DetailFocus::Tabs;
-                    selected_detail_tab_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Cover -> Tabs" << std::endl;
                 }
                 else if (keys_down & HidNpadButton_A) {
                     if (detail_layout && detail_layout->GetCard()) {
@@ -1203,13 +1166,6 @@ namespace romm::navigation {
                     state_changed = true;
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Cover" << std::endl;
-                }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    detail_focus = DetailFocus::Tabs;
-                    selected_detail_tab_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Tabs" << std::endl;
                 }
                 // A on the sync action - single press only. The sync options
                 // modal opens first; the worker starts on confirmation there.

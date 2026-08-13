@@ -44,7 +44,6 @@ namespace romm::navigation {
     };
 
     enum class DetailFocus {
-        Tabs,
         Actions,
         Cover
     };
@@ -105,8 +104,7 @@ namespace romm::navigation {
 
 
         DetailFocus detail_focus;
-        size_t selected_detail_tab_idx;    // Active detail tab (0 = DETAILS, the only one left)
-        size_t selected_detail_action_idx; // Active detail action (0 = Download)
+        size_t selected_detail_action_idx; // Active detail action (0 = Sync)
 
         // D-pad hold-repeat state
         u64 repeat_held_button;
@@ -190,7 +188,6 @@ namespace romm::navigation {
         s32 GetPanelDescScroll() const { return panel_desc_scroll; }
         void SetPanelDescScrollMax(s32 max) { if (panel_desc_scroll > max) panel_desc_scroll = max; }
         DetailFocus GetDetailFocus() const { return detail_focus; }
-        size_t GetSelectedDetailTabIdx() const { return selected_detail_tab_idx; }
         size_t GetSelectedDetailActionIdx() const { return selected_detail_action_idx; }
         
         // Settings accessors
