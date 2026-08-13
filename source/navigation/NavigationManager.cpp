@@ -8,9 +8,6 @@
 #include "../model/UpdateManager.hpp"
 #include "../ui/DetailLayout.hpp"
 #include "../ui/SettingsLayout.hpp"
-#include "../ui/InstalledLayout.hpp"
-#include "../ui/QueueLayout.hpp"
-#include "../ui/FileBrowserLayout.hpp"
 #include "../ui/LibraryMenuModal.hpp"
 #include "../ui/AlphabetBar.hpp"
 #include "../ui/MainApplication.hpp"
@@ -138,9 +135,6 @@ namespace romm::navigation {
         library_layout = std::make_shared<romm::ui::LibraryLayout>(shared_from_this());
         detail_layout = std::make_shared<romm::ui::DetailLayout>(shared_from_this());
         settings_layout = std::make_shared<romm::ui::SettingsLayout>(shared_from_this());
-        installed_layout = std::make_shared<romm::ui::InstalledLayout>(shared_from_this());
-        queue_layout = std::make_shared<romm::ui::QueueLayout>(shared_from_this());
-        file_browser_layout = nullptr;
         fullscreen_image_layout = std::make_shared<romm::ui::FullscreenImageLayout>();
 
         std::cout << "[NAV] [LAYOUT TRANSITION] Loading MainMenuLayout as default screen" << std::endl;
@@ -159,12 +153,6 @@ namespace romm::navigation {
         } else if (current_screen == Screen::Settings && settings_layout) {
             settings_layout->OnSelectionUpdated();
             settings_layout->UpdateFooterHints(settings_focus);
-        } else if (current_screen == Screen::Installed && installed_layout) {
-            installed_layout->OnSelectionUpdated();
-        } else if (current_screen == Screen::Queue && queue_layout) {
-            queue_layout->OnSelectionUpdated();
-        } else if (current_screen == Screen::FileBrowser && file_browser_layout) {
-            file_browser_layout->OnSelectionUpdated();
         }
     }
 
@@ -181,10 +169,6 @@ namespace romm::navigation {
         if (library_layout) library_layout->RefreshTranslations();
         if (detail_layout) detail_layout->RefreshTranslations();
         if (settings_layout) settings_layout->RefreshTranslations();
-        if (installed_layout) installed_layout->RefreshTranslations();
-        if (queue_layout) queue_layout->RefreshTranslations();
-        // Created lazily on first visit, so it may legitimately not exist yet.
-        if (file_browser_layout) file_browser_layout->RefreshTranslations();
         // FullscreenImageLayout renders its status line from tr() every frame.
 
         UpdateLayoutSelection();
@@ -207,7 +191,6 @@ namespace romm::navigation {
 
             // Force refresh on the active layouts
             if (detail_layout && detail_layout->GetCard()) detail_layout->GetCard()->ForceRefresh();
-            if (installed_layout) installed_layout->ForceRefresh();
 
             HideUninstallModal();
         }
@@ -684,14 +667,8 @@ namespace romm::navigation {
         }
 
         if (keys_effective == 0) {
-            if (current_screen == Screen::Detail && detail_layout) {
-                // Background updates not strictly necessary since UI polls snapshots on render, but harmless to call a function if needed.
-            } else if (current_screen == Screen::Installed && installed_layout) {
-                installed_layout->OnSelectionUpdated(); // Keep dynamic lists refreshed
-            } else if (current_screen == Screen::Queue && queue_layout) {
-                queue_layout->OnSelectionUpdated(); // Keep dynamic lists refreshed
-            }
-            return; // Nothing to process
+            // Nothing to process — screens poll their own state on render.
+            return;
         }
 
         bool state_changed = false;
@@ -1433,37 +1410,9 @@ namespace romm::navigation {
                     }
             }
         }
-        else if (current_screen == Screen::Installed) {
-            if (keys_down & HidNpadButton_B) {
-                current_screen = Screen::MainMenu;
-                state_changed = true;
-                app->LoadLayout(main_menu_layout);
-            }
-            else {
-                installed_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
-            }
-        }
-        else if (current_screen == Screen::Queue) {
-            if (keys_down & HidNpadButton_B) {
-                current_screen = Screen::MainMenu;
-                state_changed = true;
-                app->LoadLayout(main_menu_layout);
-            }
-            else {
-                queue_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
-            }
-        }
-        else if (current_screen == Screen::FileBrowser) {
-            if (file_browser_layout) {
-                file_browser_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
-            }
-        }
 
         if (current_screen != old_screen) {
             last_transition_time = std::chrono::high_resolution_clock::now();
-            if (old_screen == Screen::FileBrowser && file_browser_layout) {
-                file_browser_layout->CancelPendingScan();
-            }
         }
 
         if (state_changed) {

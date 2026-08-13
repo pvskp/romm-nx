@@ -3,7 +3,6 @@
 #include <string>
 #include <map>
 #include <mutex>
-#include <set>
 #include <vector>
 
 namespace romm::model {
@@ -193,31 +192,8 @@ namespace romm::model {
         // game), under <base>/assets/backgrounds/<platform>.jpg.
         std::string GetTicoBackgroundPath(const std::string& romm_slug) const;
 
-        // --- Platform visibility (Settings > Platforms) -------------------
-        // Purely a UI filter over the platform browser: nothing here touches
-        // ROM files, installed_index.json, download paths, covers or cache.
-        // Keyed by NormalizePlatformId(), so aliases of the same platform
-        // share one entry; accepts a raw RomM slug or a display name.
-        bool IsPlatformVisible(const std::string& slug) const;
-        void SetPlatformVisible(const std::string& slug, bool visible);
-        // Restores the shipped default-visible / default-hidden lists. Any
-        // platform outside the catalogue goes back to hidden.
-        void ResetPlatformVisibilityDefaults();
-        // Unhides everything currently known, catalogue or server-detected.
-        void ShowAllPlatforms();
-
-        // Records the platforms the server just returned. Ones seen for the
-        // first time take their catalogue default (unknown => hidden), which
-        // is what makes "hidden by default" stick without re-hiding a platform
-        // the user has since enabled. Returns true if anything changed, so the
-        // caller can Save() exactly once.
-        bool RegisterDetectedPlatforms(const std::vector<std::string>& slugs);
-
-        const std::set<std::string>& GetHiddenPlatformIds() const { return hidden_platforms; }
-        const std::set<std::string>& GetKnownPlatformIds() const { return known_platforms; }
-
     private:
-        ConfigManager();
+        ConfigManager() = default;
 
         // Serializes the config.json write. UpdateManager records the installed
         // channel from its worker thread, which can otherwise interleave with a
@@ -267,13 +243,6 @@ namespace romm::model {
         std::string dismissed_update_version;
 
         std::map<std::string, GridViewMode> platform_grid_view_mode;
-
-        // Canonical ids the user has hidden from the platform browser, and
-        // every canonical id romm-nx has ever seen. The second list is what
-        // lets a *newly* detected platform default to hidden without also
-        // re-hiding one the user deliberately enabled earlier.
-        std::set<std::string> hidden_platforms;
-        std::set<std::string> known_platforms;
     };
 
 }

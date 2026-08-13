@@ -21,13 +21,6 @@ namespace romm::ui {
         // i18n keys for the two dashboard cards, in navigation order.
         static const char* const kItemKeys[2];
 
-        s32 card_w;
-        s32 card_h;
-        s32 col_spacing;
-        s32 row_spacing;
-        s32 offset_x;
-        s32 offset_y;
-
         void InitTextures();
         void ClearTextures();
 

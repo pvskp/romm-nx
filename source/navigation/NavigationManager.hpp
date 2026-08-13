@@ -14,9 +14,6 @@ namespace romm::ui {
     class LibraryLayout;
     class DetailLayout;
     class SettingsLayout;
-    class InstalledLayout;
-    class QueueLayout;
-    class FileBrowserLayout;
     class FullscreenImageLayout;
 }
 
@@ -34,9 +31,6 @@ namespace romm::navigation {
         Library,
         Detail,
         Settings,
-        Installed,
-        Queue,
-        FileBrowser,
         FullscreenImage
     };
 
@@ -153,9 +147,6 @@ namespace romm::navigation {
         std::shared_ptr<romm::ui::LibraryLayout> library_layout;
         std::shared_ptr<romm::ui::DetailLayout> detail_layout;
         std::shared_ptr<romm::ui::SettingsLayout> settings_layout;
-        std::shared_ptr<romm::ui::InstalledLayout> installed_layout;
-        std::shared_ptr<romm::ui::QueueLayout> queue_layout;
-        std::shared_ptr<romm::ui::FileBrowserLayout> file_browser_layout;
         std::shared_ptr<romm::ui::FullscreenImageLayout> fullscreen_image_layout;
 
         void UpdateLayoutSelection();
@@ -226,9 +217,6 @@ namespace romm::navigation {
         std::shared_ptr<romm::ui::LibraryLayout> GetLibraryLayout() { return library_layout; }
         std::shared_ptr<romm::ui::DetailLayout> GetDetailLayout() { return detail_layout; }
         std::shared_ptr<romm::ui::SettingsLayout> GetSettingsLayout() { return settings_layout; }
-        std::shared_ptr<romm::ui::InstalledLayout> GetInstalledLayout() const { return installed_layout; }
-        std::shared_ptr<romm::ui::QueueLayout> GetQueueLayout() const { return queue_layout; }
-        std::shared_ptr<romm::ui::FileBrowserLayout> GetFileBrowserLayout() { return file_browser_layout; }
         std::shared_ptr<romm::ui::FullscreenImageLayout> GetFullscreenImageLayout() { return fullscreen_image_layout; }
         std::shared_ptr<romm::model::DataModel> GetModel() { return model; }
         pu::ui::Application* GetApp() { return app; }

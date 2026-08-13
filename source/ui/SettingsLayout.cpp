@@ -12,7 +12,6 @@
 #include "MainApplication.hpp"
 #include "GlobalProgressBar.hpp"
 #include "../model/AudioManager.hpp"
-#include "../model/PlatformCatalog.hpp"
 #include "../model/DataModel.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdlib>

@@ -22,8 +22,7 @@ namespace romm::ui {
     };
 
     MenuGrid::MenuGrid(s32 x, s32 y, s32 w, s32 h, std::shared_ptr<romm::navigation::NavigationManager> nav)
-        : Element(), x(x), y(y), w(w), h(h), nav_mgr(nav),
-          card_w(360), card_h(320), col_spacing(50), row_spacing(40), offset_x(165), offset_y(50) {
+        : Element(), x(x), y(y), w(w), h(h), nav_mgr(nav) {
         InitTextures();
     }
 
