@@ -83,8 +83,8 @@ namespace romm::model {
         bool force_save_upload = false;  // push the local save unconditionally
         bool force_save_download = false; // pull the server save unconditionally
         bool force_cover = false;        // re-download the cover even if present
-        // Also write the (downloaded) cover as the platform background
-        // (assets/backgrounds/<platform>.jpg) — one image per platform.
+        // Also write the (downloaded) cover as this game's platform background
+        // (assets/backgrounds/<platform>/<game>.jpg, one file per game).
         bool use_cover_as_background = false;
     };
 

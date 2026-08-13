@@ -188,9 +188,11 @@ namespace romm::model {
         std::string GetTicoRomPath(const std::string& romm_slug) const;
         std::string GetTicoSavePath(const std::string& romm_slug) const;
         std::string GetTicoCoverPath(const std::string& romm_slug) const;
-        // One background image per platform (the cover of the last synced
-        // game), under <base>/assets/backgrounds/<platform>.jpg.
-        std::string GetTicoBackgroundPath(const std::string& romm_slug) const;
+        // One background image per game, mirroring Tico's cover layout:
+        // <base>/assets/backgrounds/<platform>/<game_base>.jpg. The base name
+        // is the ROM file name without extension (same stem the cover uses).
+        std::string GetTicoBackgroundPath(const std::string& romm_slug,
+                                          const std::string& game_base) const;
 
     private:
         ConfigManager() = default;

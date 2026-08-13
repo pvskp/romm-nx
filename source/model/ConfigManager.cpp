@@ -156,8 +156,10 @@ namespace romm::model {
         return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
     }
 
-    std::string ConfigManager::GetTicoBackgroundPath(const std::string& romm_slug) const {
-        return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + ".jpg";
+    std::string ConfigManager::GetTicoBackgroundPath(const std::string& romm_slug,
+                                                     const std::string& game_base) const {
+        return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) +
+               "/" + game_base + ".jpg";
     }
 
     bool ConfigManager::Load() {

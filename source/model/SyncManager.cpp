@@ -1008,13 +1008,12 @@ namespace romm::model {
         }
 
         // --- Stage 4: Background (optional) --------------------------------
-        // Reuse this cover as the platform background (one image per platform
-        // — the last synced game's cover wins). Runs for every game when the
-        // option is on: even when the cover was already on disk (skipped) or
-        // the server has no cover art for this game but an older cover file
-        // remains on disk. In a batch the last game decides what the platform
-        // shows, so gating this on any per-game condition silently lost
-        // backgrounds for whole platforms.
+        // Reuse this cover as the platform background for THIS game, mirroring
+        // Tico's cover layout: assets/backgrounds/<platform>/<game>.jpg, one
+        // file per game (the same stem the cover uses). Runs for every game
+        // when the option is on: even when the cover was already on disk
+        // (skipped) or the server has no cover art for this game but an older
+        // cover file remains on disk.
         if (options.use_cover_as_background) {
             if (cancel_requested_.load()) {
                 SetStage(SyncStage::Background, SyncStageState::Skipped,
@@ -1022,7 +1021,7 @@ namespace romm::model {
             } else {
                 struct stat bg_check;
                 if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
-                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
+                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug, rom_base);
                     SetStage(SyncStage::Background, SyncStageState::Running,
                              romm::i18n::tr("sync.background.copying"));
                     if (CopyFile(cover_target, bg_path)) {
