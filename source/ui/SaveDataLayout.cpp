@@ -136,7 +136,6 @@ namespace romm::ui {
         const auto& plat = platforms[plat_idx];
         const auto snap = romm::model::SaveManager::Instance().GetSnapshot();
         const size_t game_count = plat.games.size();
-        const bool list_focused = (nav->GetSaveListFocus() == 0);
 
         // Keep the SaveManager snapshot aligned with the model's game list:
         // the ROM fetch may land after the screen opened, or a platform
@@ -198,13 +197,48 @@ namespace romm::ui {
             }
         }
 
+        // --- Batch action toolbar (top of the right column) -----------------
+        // Always visible above the game list, so the batch actions are never
+        // hidden behind scroll position. Focused with Down/Right from the
+        // list, or Up from the list's top row.
+        const bool toolbar_focused = (nav->GetSaveListFocus() == 2);
+        constexpr s32 bar_y = 128;
+        constexpr s32 btn_w = 280;
+        constexpr s32 btn_h = 62;
+        constexpr s32 btn_gap = 24;
+        static const char* kActionKeys[] = {"save_data.action.sync_all",
+                                            "save_data.action.upload_all",
+                                            "save_data.action.download_all"};
+        for (size_t i = 0; i < 3; ++i) {
+            const s32 bx = 500 + (s32)i * (btn_w + btn_gap);
+            const bool active = (nav->GetSaveActionIdx() == i);
+            pu::ui::Color border = toolbar_focused ? highlight : pu::ui::Color(45, 50, 62, 255);
+            pu::ui::Color bg(28, 31, 38, 255);
+            if (toolbar_focused && active) {
+                border = highlight;
+                bg = pu::ui::Color(85, 63, 152, 255);
+            }
+            drawer->RenderRoundedRectangleFill(border, bx, bar_y, btn_w, btn_h, 12);
+            drawer->RenderRoundedRectangleFill(bg, bx + 4, bar_y + 4, btn_w - 8, btn_h - 8, 10);
+            pu::sdl2::Texture tex = pu::ui::render::RenderText(
+                "Orbitron@24", romm::i18n::tr(kActionKeys[i]),
+                (toolbar_focused && active) ? highlight : text_color);
+            if (tex) {
+                s32 tw = pu::ui::render::GetTextureWidth(tex);
+                s32 th = pu::ui::render::GetTextureHeight(tex);
+                drawer->RenderTexture(tex, bx + (btn_w - tw) / 2, bar_y + (btn_h - th) / 2);
+                pu::ui::render::DeleteTexture(tex);
+            }
+        }
+
         // --- Platform list (left) -------------------------------------------
         constexpr s32 plat_x = 60;
-        constexpr s32 plat_y = 170;
+        constexpr s32 plat_y = 210;
         constexpr s32 plat_w = 400;
-        constexpr s32 plat_h = 760;
-        constexpr s32 plat_row_h = 72;
+        constexpr s32 plat_h = 730;
+        constexpr s32 plat_row_h = 68;
         constexpr s32 plat_visible = 10;
+        const bool plat_focused = (nav->GetSaveListFocus() == 0);
         if ((s32)plat_idx < plat_scroll) plat_scroll = (s32)plat_idx;
         if ((s32)plat_idx >= plat_scroll + plat_visible) {
             plat_scroll = (s32)plat_idx - plat_visible + 1;
@@ -214,12 +248,18 @@ namespace romm::ui {
             if (row_y < plat_y || row_y + plat_row_h > plat_y + plat_h) continue;
             const bool sel = (i == plat_idx);
             if (sel) {
-                drawer->RenderRoundedRectangleFill(pu::ui::Color(85, 63, 152, 255),
-                                                   plat_x, row_y, plat_w, plat_row_h - 6, 10);
+                pu::ui::Color border = plat_focused ? highlight : pu::ui::Color(45, 50, 62, 255);
+                drawer->RenderRoundedRectangleFill(border, plat_x, row_y, plat_w, plat_row_h - 6, 10);
+                drawer->RenderRoundedRectangleFill(
+                    pu::ui::Color(85, 63, 152, plat_focused ? 255 : 130),
+                    plat_x + (plat_focused ? 4 : 0), row_y + (plat_focused ? 4 : 0),
+                    plat_w - (plat_focused ? 8 : 0), plat_row_h - 6 - (plat_focused ? 8 : 0), 8);
             }
+            // Long system names are truncated to the strip; unclipped they
+            // would bleed into the game list's text.
             pu::sdl2::Texture tex = pu::ui::render::RenderText(
                 "Ubuntu@30", platforms[i].name,
-                sel ? highlight : dim_color);
+                sel ? highlight : dim_color, plat_w - 40);
             if (tex) {
                 drawer->RenderTexture(tex, plat_x + 20, row_y + (plat_row_h - 6 - pu::ui::render::GetTextureHeight(tex)) / 2);
                 pu::ui::render::DeleteTexture(tex);
@@ -228,10 +268,11 @@ namespace romm::ui {
 
         // --- Game list (right) ------------------------------------------------
         constexpr s32 list_x = 500;
-        constexpr s32 list_y = 170;
+        constexpr s32 list_y = 210;
         constexpr s32 list_w = 1360;
-        constexpr s32 row_h = 92;
+        constexpr s32 row_h = 84;
         constexpr s32 visible = 8;
+        const bool list_focused = (nav->GetSaveListFocus() == 1);
         const size_t sel = std::min(nav->GetSaveGameIdx(), game_count > 0 ? game_count - 1 : 0);
         if (game_count > 0) {
             if (sel < (size_t)list_scroll) list_scroll = (s32)sel;
@@ -259,7 +300,13 @@ namespace romm::ui {
             state_by_id[g.rom_id] = &g;
         }
 
-        const char* hint_key = list_focused ? "save_data.hint.list" : "save_data.hint.bar";
+        // Hint follows the focus zone, like the Games screen's footer.
+        const char* hint_key = "save_data.hint.platform";
+        if (nav->GetSaveListFocus() == 1) {
+            hint_key = "save_data.hint.games";
+        } else if (nav->GetSaveListFocus() == 2) {
+            hint_key = "save_data.hint.toolbar";
+        }
         pu::sdl2::Texture tex_hint = pu::ui::render::RenderText("Ubuntu@22",
             romm::i18n::tr(hint_key), dim_color);
         if (tex_hint) {
@@ -285,7 +332,9 @@ namespace romm::ui {
                 drawer->RenderRoundedRectangleFill(bg, list_x + 4, ry + 4, list_w - 8, row_h - 16, 10);
             }
 
-            // Title (cached per row; color depends on selection).
+            // Title (cached per row; color depends on selection). The ROM's
+            // name is the row's identity — without it the verdict chips and
+            // meta lines are unreadable.
             const pu::ui::Color title_color = selected ? highlight : text_color;
             std::string title_key = std::to_string(game.id) + "|" + game.title + "|" +
                                     (selected ? "1" : "0");
@@ -295,17 +344,20 @@ namespace romm::ui {
                     pu::ui::render::DeleteTexture(tit->second.tex);
                 }
                 pu::sdl2::Texture tex = pu::ui::render::RenderText(
-                    "Ubuntu@28", game.title, title_color, list_w - 340);
+                    "Ubuntu@26", game.title, title_color, list_w - 340);
                 row_title_texs[game.id] = { title_key, tex };
             }
             if (row_title_texs[game.id].tex) {
-                drawer->RenderTexture(row_title_texs[game.id].tex, list_x + 24, ry + 12);
+                drawer->RenderTexture(row_title_texs[game.id].tex, list_x + 24, ry + 10);
             }
 
-            // Meta line (cached): local info + server date.
+            // Meta line (cached): local save name + info, then server date.
             std::string meta;
             if (st && st->local_exists) {
-                meta = FormatBytes(st->local_size) + "  ·  " + st->local_hash;
+                std::string fname = st->local_path;
+                size_t slash = fname.find_last_of('/');
+                if (slash != std::string::npos) fname = fname.substr(slash + 1);
+                meta = fname + "  ·  " + FormatBytes(st->local_size) + "  ·  " + st->local_hash;
             } else {
                 meta = romm::i18n::tr("save_data.meta.no_local");
             }
@@ -331,7 +383,7 @@ namespace romm::ui {
                 row_meta_texs[game.id] = { meta_key, tex };
             }
             if (row_meta_texs[game.id].tex) {
-                drawer->RenderTexture(row_meta_texs[game.id].tex, list_x + 24, ry + 52);
+                drawer->RenderTexture(row_meta_texs[game.id].tex, list_x + 24, ry + 48);
             }
 
             // Verdict chip (cached per verdict).
@@ -357,36 +409,6 @@ namespace romm::ui {
                                                    cx + 2, ry + 16, chip_w - 4, chip_h - 4, 6);
                 drawer->RenderTexture(chip_texs[(int)verdict].tex,
                                       cx + (chip_w - tw) / 2, ry + 14 + (chip_h - th) / 2);
-            }
-        }
-
-        // --- Batch action bar -------------------------------------------------
-        constexpr s32 bar_y = 950;
-        constexpr s32 btn_w = 270;
-        constexpr s32 btn_h = 80;
-        constexpr s32 btn_gap = 30;
-        static const char* kActionKeys[] = {"save_data.action.sync_all",
-                                            "save_data.action.upload_all",
-                                            "save_data.action.download_all"};
-        for (size_t i = 0; i < 3; ++i) {
-            const s32 bx = list_x + (s32)i * (btn_w + btn_gap);
-            const bool active = (nav->GetSaveActionIdx() == i);
-            pu::ui::Color border = (list_focused) ? pu::ui::Color(45, 50, 62, 255) : highlight;
-            pu::ui::Color bg(28, 31, 38, 255);
-            if (!list_focused && active) {
-                border = highlight;
-                bg = pu::ui::Color(85, 63, 152, 255);
-            }
-            drawer->RenderRoundedRectangleFill(border, bx, bar_y, btn_w, btn_h, 12);
-            drawer->RenderRoundedRectangleFill(bg, bx + 4, bar_y + 4, btn_w - 8, btn_h - 8, 10);
-            pu::sdl2::Texture tex = pu::ui::render::RenderText(
-                "Orbitron@24", romm::i18n::tr(kActionKeys[i]),
-                (!list_focused && active) ? highlight : text_color);
-            if (tex) {
-                s32 tw = pu::ui::render::GetTextureWidth(tex);
-                s32 th = pu::ui::render::GetTextureHeight(tex);
-                drawer->RenderTexture(tex, bx + (btn_w - tw) / 2, bar_y + (btn_h - th) / 2);
-                pu::ui::render::DeleteTexture(tex);
             }
         }
     }
@@ -528,7 +550,7 @@ namespace romm::ui {
                 size_t slash = fname.find_last_of('/');
                 if (slash != std::string::npos) fname = fname.substr(slash + 1);
                 pu::sdl2::Texture tex_f = pu::ui::render::RenderText(
-                    "Ubuntu@28", fname, text_color, local_w - 60);
+                    "Ubuntu@26", fname, text_color, local_w - 60);
                 if (tex_f) {
                     drawer->RenderTexture(tex_f, local_x + 30, card_y + 90);
                     pu::ui::render::DeleteTexture(tex_f);

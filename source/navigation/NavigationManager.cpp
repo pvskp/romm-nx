@@ -322,15 +322,7 @@ namespace romm::navigation {
 
         // Kick the first platform's refresh. If its ROMs aren't loaded yet,
         // trigger the fetch too — the view re-runs the refresh once they land.
-        const auto& platforms = model->GetPlatforms();
-        if (!platforms.empty()) {
-            const auto& plat = platforms[0];
-            if (plat.games.empty()) {
-                auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                main_app->TriggerFetchRoms(std::stoi(plat.id));
-            }
-            romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
-        }
+        SelectSavePlatform();
 
         if (save_data_layout) {
             app->LoadLayout(save_data_layout);
@@ -454,7 +446,7 @@ namespace romm::navigation {
             return;
         }
 
-        // ZR re-checks the server for the whole platform.
+        // ZR re-checks the server for the whole platform, from any zone.
         if (keys_down & HidNpadButton_ZR) {
             romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
             return;
@@ -462,34 +454,51 @@ namespace romm::navigation {
 
         const size_t game_count = plat.games.size();
 
+        // Three focus zones, mirroring the Games screen's flow: the platform
+        // strip first (Left/Right enters the list), then the game list, then
+        // the batch action bar (Down reaches it from anywhere in the list).
+        // 0 = platform list, 1 = game list, 2 = action bar.
         if (save_list_focus == 0) {
-            // Game list focus.
-            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+            // Platform list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
                 if (save_platform_idx > 0) {
                     save_platform_idx--;
                     save_game_idx = 0;
-                    const auto& p2 = platforms[save_platform_idx];
-                    if (p2.games.empty()) {
-                        auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                        main_app->TriggerFetchRoms(std::stoi(p2.id));
-                    }
-                    romm::model::SaveManager::Instance().Refresh(p2.games, p2.slug);
+                    SelectSavePlatform();
                 }
-            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
                 if (save_platform_idx + 1 < plat_count) {
                     save_platform_idx++;
                     save_game_idx = 0;
-                    const auto& p2 = platforms[save_platform_idx];
-                    if (p2.games.empty()) {
-                        auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                        main_app->TriggerFetchRoms(std::stoi(p2.id));
-                    }
-                    romm::model::SaveManager::Instance().Refresh(p2.games, p2.slug);
+                    SelectSavePlatform();
                 }
-            } else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                save_list_focus = 1;
+                std::cout << "[NAV] [SAVES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                save_list_focus = 1;
+            }
+        } else if (save_list_focus == 1) {
+            // Game list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
                 if (save_game_idx > 0) save_game_idx--;
             } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                if (save_game_idx + 1 < game_count) save_game_idx++;
+                if (save_game_idx + 1 < game_count) {
+                    save_game_idx++;
+                } else {
+                    // Bottom of the list: next Down drops to the action bar.
+                    save_list_focus = 2;
+                    save_action_idx = 0;
+                    std::cout << "[NAV] [SAVES] Focus -> action bar" << std::endl;
+                }
+            } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                save_list_focus = 0;
+                std::cout << "[NAV] [SAVES] Focus -> platform list" << std::endl;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                // Right always jumps to the bar, whatever the scroll position.
+                save_list_focus = 2;
+                save_action_idx = 0;
+                std::cout << "[NAV] [SAVES] Focus -> action bar" << std::endl;
             } else if (keys_down & HidNpadButton_A) {
                 if (game_count > 0 && save_game_idx < game_count) {
                     save_detail_open = true;
@@ -500,18 +509,16 @@ namespace romm::navigation {
                     std::cout << "[NAV] [SAVES] Opened per-game view rom="
                               << save_detail_rom_id << std::endl;
                 }
-            } else if ((keys_effective & HidNpadButton_Down) && game_count > 0 &&
-                       save_game_idx + 1 >= game_count) {
-                save_list_focus = 1;
             }
         } else {
-            // Batch action bar focus.
-            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
-                save_list_focus = 0;
-            } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+            // Batch action bar.
+            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
                 if (save_action_idx > 0) save_action_idx--;
             } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
                 if (save_action_idx + 1 < 3) save_action_idx++;
+            } else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                save_list_focus = 1;
+                std::cout << "[NAV] [SAVES] Focus -> game list" << std::endl;
             } else if (keys_down & HidNpadButton_A) {
                 if (game_count == 0) return;
                 std::vector<romm::model::SyncGameEntry> games;
@@ -538,6 +545,20 @@ namespace romm::navigation {
                           << " on " << plat.slug << " games=" << games.size() << std::endl;
             }
         }
+    }
+
+    // Switches the Save Data platform cursor: fetches ROMs on demand and
+    // re-targets the SaveManager refresh at the newly selected platform.
+    void NavigationManager::SelectSavePlatform() {
+        const auto& platforms = model->GetPlatforms();
+        if (save_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[save_platform_idx];
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+        }
+        romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [SAVES] Platform -> " << plat.name << std::endl;
     }
 
     void NavigationManager::HandleLibraryMenuInput(u64 keys_down) {

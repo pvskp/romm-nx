@@ -299,6 +299,9 @@ namespace romm::navigation {
         // Opens the screen (main menu card) and kicks the first refresh.
         void OpenSaveData();
         void HandleSaveDataInput(u64 keys_down, u64 keys_effective);
+        // Moves the Save Data platform cursor: fetches ROMs on demand and
+        // re-targets the SaveManager refresh at the selected platform.
+        void SelectSavePlatform();
 
         size_t GetSavePlatformIdx() const { return save_platform_idx; }
         size_t GetSaveGameIdx() const { return save_game_idx; }
