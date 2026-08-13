@@ -252,9 +252,6 @@ namespace romm::navigation {
         bool IsSyncBulkPending() const { return sync_bulk_pending; }
         const std::string& GetSyncBulkPlatformName() const { return sync_bulk_platform_name; }
 
-        // Sidebar bottom "Sync Platform" button focus (direct library option).
-        bool IsLibraryPlatformSyncFocused() const { return library_platform_sync_focused; }
-
         // Consumes a pending "mark the whole platform" request (X pressed on
         // an unloaded platform in the sidebar). Called after that platform's
         // ROMs land; marks every game and returns whether it fired. Used by
@@ -282,13 +279,8 @@ namespace romm::navigation {
         bool update_modal_active = false;
         bool update_popup_shown_this_session = false;
 
-        // Opens the sync pre-flight options for the current platform's whole
-        // collection (all loaded games). Shared by the sidebar button.
-        void OpenPlatformSyncOptions();
-
         // Opens the sync pre-flight options for an explicit game batch
-        // (marked games via ZR, or the whole loaded platform). The sync only
-        // starts when the user confirms.
+        // (marked games via ZR). The sync only starts when the user confirms.
         void OpenBulkSyncOptions(const std::string& platform_slug, const std::string& platform_name,
                                  const std::vector<romm::model::SyncGameEntry>& games);
 
@@ -301,9 +293,6 @@ namespace romm::navigation {
         // shows its collection right away (background fetch on first hover).
         // Unlike the A handler this never moves focus off the sidebar.
         void PreviewPlatform(size_t platform_idx);
-
-        // Sidebar bottom "Sync Platform" button focus (direct library option).
-        bool library_platform_sync_focused = false;
 
         // Pending auto-mark request (see MarkSelectedPlatform).
         bool pending_mark_platform = false;

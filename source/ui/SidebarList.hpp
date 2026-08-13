@@ -39,9 +39,7 @@ namespace romm::ui {
         // pre-rendered, so a language switch has to invalidate them too.
         uint64_t cached_i18n_generation = 0;
         int sidebar_scroll_offset = 0;
-        // One fewer row than before: the bottom strip hosts the always-visible
-        // "Sync Platform" button.
-        int visible_platform_count = 12;
+        int visible_platform_count = 13;
 
         // --- Banner mode ---------------------------------------------------
         PlatformBannerCache banner_cache;

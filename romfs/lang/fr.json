@@ -97,7 +97,6 @@
   "library_menu.sort": "Trier",
   "library_menu.coming_soon": "Bientôt",
   "library_menu.view_mode": "Affichage : {mode}",
-  "library.sync_platform_btn": "SYNC PLATEFORME",
   "modal.uninstall.title": "Désinstaller le jeu ?",
   "modal.update.title": "Mise à jour disponible !",
   "modal.update.body": "romm-nx v{version} est prête à être installée.",
