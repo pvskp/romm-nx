@@ -446,6 +446,14 @@ namespace romm::ui {
         }
     }
 
+    void DetailCard::ToggleImageMode() {
+        cover_mode_miximage = !cover_mode_miximage;
+        std::cout << "[DETAIL] Image mode: " << (cover_mode_miximage ? "miximage" : "cover") << std::endl;
+        // Re-resolve the target; the current texture stays on screen until the
+        // newly requested one is ready, so the swap is never a blank frame.
+        ResolveDetailImageState(true);
+    }
+
     void DetailCard::ResolveDetailImageState(bool allow_download) {
         if (!is_active) {
             return;
@@ -466,7 +474,9 @@ namespace romm::ui {
             return;
         }
 
-        // 1. Centralized target resolution
+        // 1. Centralized target resolution. The cover is the default image;
+        // the miximage is only shown when the user explicitly switched to it
+        // with the R analog stick (cover_mode_miximage) — never automatically.
         std::string target_source = ctx.cover_path;
         std::string target_variant = "small";
 
@@ -479,28 +489,36 @@ namespace romm::ui {
             romm::model::ConfigManager::Instance().GetCoversQuality() != romm::model::CoversQuality::SD;
 
         romm::model::DetailLoadState state = model->GetDetailState(rom_id);
-        if (allow_large_cover && state == romm::model::DetailLoadState::Loaded) {
+        if (state == romm::model::DetailLoadState::Loaded) {
             const auto* detail = model->GetCachedDetail(rom_id);
             if (detail) {
                 std::string miximage_url = detail->miximage_v2_url;
                 std::string large_url = detail->path_cover_large;
 
-                // Query CoverCache for permanent failure state
-                CoverCacheKey mix_key = expected_identity.cache_key;
-                mix_key.cover_source = miximage_url;
-                mix_key.variant = "miximage_v2";
-                int mix_w = 0, mix_h = 0;
-                GetVariantDimensions("miximage_v2", mix_w, mix_h);
-                mix_key.requested_width = mix_w;
-                mix_key.requested_height = mix_h;
+                // Prefetch the miximage (and learn its state) so switching to
+                // it with the R analog stick is instant, but never select it
+                // as the target unless the user asked for it.
+                CoverState mix_state = CoverState::Missing;
+                if (!miximage_url.empty()) {
+                    CoverCacheKey mix_key = expected_identity.cache_key;
+                    mix_key.cover_source = miximage_url;
+                    mix_key.variant = "miximage_v2";
+                    int mix_w = 0, mix_h = 0;
+                    GetVariantDimensions("miximage_v2", mix_w, mix_h);
+                    mix_key.requested_width = mix_w;
+                    mix_key.requested_height = mix_h;
 
-                auto mix_res = CoverCache::Instance().GetOrRequest(rom_id, ctx.platform_slug, miximage_url, currentCoverProfile.type, "miximage_v2", false, actual_cover_w, actual_cover_h);
+                    auto mix_res = CoverCache::Instance().GetOrRequest(
+                        rom_id, ctx.platform_slug, miximage_url, currentCoverProfile.type,
+                        "miximage_v2", false, actual_cover_w, actual_cover_h);
+                    mix_state = mix_res.state;
+                }
 
-                if (!miximage_url.empty() && mix_res.state != CoverState::FailedPermanent) {
+                if (cover_mode_miximage && !miximage_url.empty() && mix_state != CoverState::FailedPermanent) {
                     target_source = miximage_url;
                     target_variant = "miximage_v2";
-                } else if (!large_url.empty()) {
-                    CoverCacheKey large_key = mix_key;
+                } else if (allow_large_cover && !large_url.empty()) {
+                    CoverCacheKey large_key = expected_identity.cache_key;
                     large_key.cover_source = large_url;
                     large_key.variant = "big";
                     int l_w = 0, l_h = 0;
@@ -508,7 +526,9 @@ namespace romm::ui {
                     large_key.requested_width = l_w;
                     large_key.requested_height = l_h;
 
-                    auto large_res = CoverCache::Instance().GetOrRequest(rom_id, ctx.platform_slug, large_url, currentCoverProfile.type, "big", false, actual_cover_w, actual_cover_h);
+                    auto large_res = CoverCache::Instance().GetOrRequest(
+                        rom_id, ctx.platform_slug, large_url, currentCoverProfile.type,
+                        "big", false, actual_cover_w, actual_cover_h);
                     if (large_res.state != CoverState::FailedPermanent) {
                         target_source = large_url;
                         target_variant = "big";

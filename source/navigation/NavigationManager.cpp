@@ -1111,12 +1111,19 @@ namespace romm::navigation {
             }
         }
         else if (current_screen == Screen::Detail) {
-            // Scroll description logic (R-Stick or ZL/ZR)
+            // Scroll description logic (R-Stick up/down or ZL/ZR)
             if ((keys_effective & HidNpadButton_StickRDown) || (keys_effective & HidNpadButton_ZR)) {
                 if (detail_layout) detail_layout->ScrollDescription(1);
             }
             else if ((keys_effective & HidNpadButton_StickRUp) || (keys_effective & HidNpadButton_ZL)) {
                 if (detail_layout) detail_layout->ScrollDescription(-1);
+            }
+            // R-Stick left/right switches the card image between the cover
+            // and the game screenshot (miximage) — never automatic.
+            else if ((keys_down & HidNpadButton_StickRLeft) || (keys_down & HidNpadButton_StickRRight)) {
+                if (detail_layout && detail_layout->GetCard()) {
+                    detail_layout->GetCard()->ToggleImageMode();
+                }
             }
 
             // B to exit detail - single press only

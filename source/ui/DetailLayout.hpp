@@ -152,6 +152,11 @@ namespace romm::ui {
         uint64_t logged_apply_gen_val = 0;
         CoverState last_known_cache_state = CoverState::Unknown;
 
+        // User's image choice for the card viewport: false = cover (default),
+        // true = the game screenshot (miximage). Persists across game changes
+        // on this screen; toggled with the R analog stick.
+        bool cover_mode_miximage = false;
+
         void InitTextures();
         void ClearTextures();
         void GetVariantDimensions(const std::string& variant, int& w, int& h);
@@ -167,6 +172,12 @@ namespace romm::ui {
         // Re-rasterises the button/tab/placeholder labels after a language
         // change — they're all pre-rendered at construction.
         void RefreshTranslations();
+
+        // Switches the image shown in the card's viewport between the cover
+        // and the game screenshot (miximage), keeping whichever the user did
+        // NOT pick until the other one is ready. Triggered by the R analog
+        // stick on the Detail screen — never automatic.
+        void ToggleImageMode();
 
         // Single source of truth for the tab count (Details/Save Data/Mods/
         // Cheats) — OnRender's tab strip and NavigationManager's Right-
