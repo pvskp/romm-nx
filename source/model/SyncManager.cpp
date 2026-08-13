@@ -544,12 +544,10 @@ namespace romm::model {
     }
 
     // Full per-save decision flow (decision table in the PRD, section 5.5).
-    // The worker runs this after resolving the save target path. When
-    // prompt_conflicts is false (platform-wide sync), conflicts are skipped
-    // and reported instead of blocking on the user.
+    // The worker runs this after resolving the save target path. Conflicts
+    // always prompt the user — per game, single or platform-wide sync alike.
     void SyncManager::RunSavesStage(int rom_id, const std::string& tico_slug,
-                                    const std::string& target, const SyncOptions& options,
-                                    bool prompt_conflicts) {
+                                    const std::string& target, const SyncOptions& options) {
         std::string core = ResolveTicoCore(tico_slug);
         if (core.empty()) {
             SetStage(SyncStage::Saves, SyncStageState::Unsupported,
@@ -671,13 +669,9 @@ namespace romm::model {
                 break;
             }
             case SaveAction::Prompt: {
-                // Platform-wide mode never blocks on the prompt: skip the save
-                // and let the user resolve it per game afterwards.
-                if (!prompt_conflicts) {
-                    SetStage(SyncStage::Saves, SyncStageState::Skipped,
-                             romm::i18n::tr("sync.bulk.conflict_skipped"));
-                    break;
-                }
+                // The user decides every time: local or cloud wins for this
+                // save, or skip it. Works in platform-wide sync too — the
+                // same modal, once per conflicting game.
                 SaveConflict conf;
                 conf.active = true;
                 conf.rom_id = rom_id;
@@ -747,7 +741,7 @@ namespace romm::model {
         }
         ResetStages(title);
         ScreenWakeManager::Instance().RequestUpdate();
-        RunGameSync(detail, platform_slug, title, options, false);
+        RunGameSync(detail, platform_slug, title, options);
         Finish();
     }
 
@@ -803,18 +797,16 @@ namespace romm::model {
                 SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
                 continue;
             }
-            RunGameSync(res->detail, game_slug, games[i].title, options, true);
+            RunGameSync(res->detail, game_slug, games[i].title, options);
         }
         Finish();
     }
 
     // Shared per-game pipeline (ROM -> saves -> cover) used by both the
-    // single-game and the platform-wide workers. `bulk_mode` only changes the
-    // conflict handling: platform-wide runs skip conflicts instead of blocking
-    // on the prompt (those can be resolved later with the per-game sync).
+    // single-game and the platform-wide workers. Save conflicts prompt the
+    // user in both flows.
     void SyncManager::RunGameSync(const GameDetail& detail, const std::string& platform_slug,
-                                  const std::string& title, const SyncOptions& options,
-                                  bool bulk_mode) {
+                                  const std::string& title, const SyncOptions& options) {
         struct stat st;
 
         auto& config = ConfigManager::Instance();
@@ -947,7 +939,7 @@ namespace romm::model {
         SaveSyncState();
 
         // --- Stage 2: Saves ----------------------------------------------
-        RunSavesStage(detail.rom_id, tico_slug, save_target, options, !bulk_mode);
+        RunSavesStage(detail.rom_id, tico_slug, save_target, options);
         if (cancel_requested_.load()) {
             return;
         }

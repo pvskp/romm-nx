@@ -112,9 +112,8 @@ namespace romm::model {
                        const std::string& title, const SyncOptions& options = SyncOptions());
 
         // Kicks off a platform-wide sync: every game in `games` is handled in
-        // order (ROM -> saves -> cover each). Save conflicts are never
-        // prompted in this mode — they are skipped and can be resolved later
-        // with the per-game Sync.
+        // order (ROM -> saves -> cover each). Save conflicts prompt the user
+        // exactly like a per-game sync does — the same modal, per game.
         void StartPlatformSync(const std::string& platform_slug, const std::string& platform_name,
                                const std::vector<SyncGameEntry>& games,
                                const SyncOptions& options = SyncOptions());
@@ -160,8 +159,7 @@ namespace romm::model {
         // Shared per-game pipeline (ROM -> saves -> cover), used by both the
         // single-game and the platform-wide workers.
         void RunGameSync(const GameDetail& detail, const std::string& platform_slug,
-                         const std::string& title, const SyncOptions& options,
-                         bool bulk_mode);
+                         const std::string& title, const SyncOptions& options);
         void ResetStages(const std::string& title);
         void Finish();
         void SetStage(SyncStage stage, SyncStageState state, const std::string& message);
@@ -178,7 +176,7 @@ namespace romm::model {
                            const std::string& tico_slug, const std::string& core,
                            const std::string& rom_path, long long rom_size);
         void RunSavesStage(int rom_id, const std::string& tico_slug, const std::string& target,
-                           const SyncOptions& options, bool prompt_conflicts = true);
+                           const SyncOptions& options);
 
         static void* SyncTrampoline(void* arg);
         static void* PlatformSyncTrampoline(void* arg);

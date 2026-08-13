@@ -154,7 +154,6 @@
   "sync.saves.no_server": "Aucune sauvegarde serveur à télécharger",
   "sync.bulk.progress": "Plateforme : {name} ({index}/{total})",
   "sync.bulk.options_sub": "{name} — tous les jeux",
-  "sync.bulk.conflict_skipped": "Conflit de sauvegarde — ignoré (à résoudre jeu par jeu)",
   "sync.bulk.detail_failed": "Impossible de charger les détails du jeu",
   "save.error.config": "Téléchargement de la sauvegarde bloqué : configuration invalide",
   "save.error.write": "Impossible d'écrire le fichier de sauvegarde",

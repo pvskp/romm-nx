@@ -154,7 +154,6 @@
   "sync.saves.no_server": "No server save to download",
   "sync.bulk.progress": "Platform: {name} ({index}/{total})",
   "sync.bulk.options_sub": "{name} — all games",
-  "sync.bulk.conflict_skipped": "Save conflict — skipped (resolve per game)",
   "sync.bulk.detail_failed": "Could not load game details",
   "save.error.config": "Save download blocked: invalid configuration",
   "save.error.write": "Could not write save file",
