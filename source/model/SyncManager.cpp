@@ -41,6 +41,34 @@ namespace romm::model {
             return (dot != std::string::npos) ? filename.substr(0, dot) : filename;
         }
 
+        // Copies one small file (cover art) to another path, creating the
+        // destination's parent folder. Plain FILE I/O is fine here — covers
+        // are a few hundred KB at most.
+        bool CopyFile(const std::string& src, const std::string& dst) {
+            FILE* in = fopen(src.c_str(), "rb");
+            if (!in) return false;
+
+            size_t slash = dst.find_last_of('/');
+            if (slash != std::string::npos) {
+                mkdir(dst.substr(0, slash).c_str(), 0777);
+            }
+
+            FILE* out = fopen(dst.c_str(), "wb");
+            if (!out) {
+                fclose(in);
+                return false;
+            }
+
+            char buf[65536];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+                fwrite(buf, 1, n, out);
+            }
+            fclose(out);
+            fclose(in);
+            return true;
+        }
+
         // Blocks this thread until the HTTP pool finishes a result object, or
         // the sync was cancelled (in which case we stop waiting and let the
         // pool lane finish on its own — it only writes to the result struct).
@@ -968,6 +996,21 @@ namespace romm::model {
                     SaveSyncState();
                     SetStage(SyncStage::Cover, SyncStageState::Ok,
                              romm::i18n::format("sync.cover.ok", {{"path", cover_target}}));
+                }
+            }
+
+            // Optional: reuse this cover as the platform background (one image
+            // per platform — the last synced game's cover wins).
+            if (options.use_cover_as_background && !cancel_requested_.load()) {
+                struct stat bg_check;
+                if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
+                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
+                    if (CopyFile(cover_target, bg_path)) {
+                        std::cout << "[SYNC] Platform background updated: " << bg_path << std::endl;
+                    } else {
+                        std::cerr << "[SYNC] Could not copy cover to background: "
+                                  << bg_path << std::endl;
+                    }
                 }
             }
         }

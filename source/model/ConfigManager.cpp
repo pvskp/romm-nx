@@ -216,6 +216,10 @@ namespace romm::model {
         return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
     }
 
+    std::string ConfigManager::GetTicoBackgroundPath(const std::string& romm_slug) const {
+        return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + ".jpg";
+    }
+
     bool ConfigManager::Load() {
         std::string path = "sdmc:/switch/romm-nx/config.json";
         FILE* f = fopen(path.c_str(), "r");

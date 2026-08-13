@@ -140,6 +140,7 @@ namespace romm::navigation {
         size_t sync_option_idx = 0;
         bool sync_opt_force_rom = false;
         bool sync_opt_force_cover = false;
+        bool sync_opt_background = false; // cover -> platform background
         size_t sync_opt_save_dir = 0;
         // Platform-wide sync intent (triggered from the library Y-Menu).
         bool sync_bulk_pending = false;
@@ -254,6 +255,7 @@ namespace romm::navigation {
         size_t GetSyncOptionIdx() const { return sync_option_idx; }
         bool GetSyncOptionForceRom() const { return sync_opt_force_rom; }
         bool GetSyncOptionForceCover() const { return sync_opt_force_cover; }
+        bool GetSyncOptionBackground() const { return sync_opt_background; }
         size_t GetSyncOptionSaveDir() const { return sync_opt_save_dir; } // 0=auto, 1=upload, 2=download
         void SetSyncOptionIdx(size_t idx) { sync_option_idx = idx; }
 

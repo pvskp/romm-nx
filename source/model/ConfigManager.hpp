@@ -189,6 +189,9 @@ namespace romm::model {
         std::string GetTicoRomPath(const std::string& romm_slug) const;
         std::string GetTicoSavePath(const std::string& romm_slug) const;
         std::string GetTicoCoverPath(const std::string& romm_slug) const;
+        // One background image per platform (the cover of the last synced
+        // game), under <base>/assets/backgrounds/<platform>.jpg.
+        std::string GetTicoBackgroundPath(const std::string& romm_slug) const;
 
         // --- Platform visibility (Settings > Platforms) -------------------
         // Purely a UI filter over the platform browser: nothing here touches

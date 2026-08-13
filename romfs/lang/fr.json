@@ -188,6 +188,7 @@
 
   "sync.option.force_rom": "Forcer le téléchargement de la ROM",
   "sync.option.force_cover": "Forcer le téléchargement de la cover",
+  "sync.option.background": "Cover en fond de plateforme",
   "sync.option.saves": "Sauvegardes",
   "sync.option.saves.auto": "Auto",
   "sync.option.saves.upload": "Forcer l'envoi",

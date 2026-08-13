@@ -220,7 +220,9 @@ namespace romm::navigation {
 
         // Pre-flight options screen: the sync has not started yet.
         if (sync_modal_mode == SyncModalMode::Options) {
-            static constexpr size_t kOptionRows = 4; // rom, cover, saves, start
+            // 0 = force ROM, 1 = force cover, 2 = cover as background,
+            // 3 = save direction, 4 = start.
+            static constexpr size_t kOptionRows = 5;
             if (keys_down & HidNpadButton_B) {
                 sync_modal_active = false;
                 sync_option_idx = 0;
@@ -234,14 +236,17 @@ namespace romm::navigation {
                 } else if (sync_option_idx == 1) {
                     sync_opt_force_cover = !sync_opt_force_cover;
                 } else if (sync_option_idx == 2) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 3) {
                     sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
                 }
             } else if (keys_down & HidNpadButton_A) {
-                if (sync_option_idx == 3) {
+                if (sync_option_idx == 4) {
                     // Start the sync with the chosen options.
                     romm::model::SyncOptions opts;
                     opts.force_rom = sync_opt_force_rom;
                     opts.force_cover = sync_opt_force_cover;
+                    opts.use_cover_as_background = sync_opt_background;
                     opts.force_save_upload = (sync_opt_save_dir == 1);
                     opts.force_save_download = (sync_opt_save_dir == 2);
 
@@ -274,6 +279,8 @@ namespace romm::navigation {
                 } else if (sync_option_idx == 1) {
                     sync_opt_force_cover = !sync_opt_force_cover;
                 } else if (sync_option_idx == 2) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 3) {
                     sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
                 }
             }
@@ -466,6 +473,7 @@ namespace romm::navigation {
         sync_option_idx = 0;
         sync_opt_force_rom = false;
         sync_opt_force_cover = false;
+        sync_opt_background = false;
         sync_opt_save_dir = 0;
         sync_conflict_selected_idx = 0;
         std::cout << "[NAV] [SYNC] Platform sync options opened for "
@@ -1279,6 +1287,7 @@ namespace romm::navigation {
                             sync_option_idx = 0;
                             sync_opt_force_rom = false;
                             sync_opt_force_cover = false;
+                            sync_opt_background = false;
                             sync_opt_save_dir = 0;
                             sync_conflict_selected_idx = 0;
                             sync_bulk_pending = false;

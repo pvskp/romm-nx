@@ -125,7 +125,7 @@ namespace romm::ui {
         pu::ui::Color highlight(230, 199, 167, 255);
 
         s32 panel_w = 900;
-        s32 panel_h = 640;
+        s32 panel_h = 800; // five option rows + warning banner + hint
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
@@ -194,14 +194,17 @@ namespace romm::ui {
         const size_t sel = nav->GetSyncOptionIdx();
         const bool force_rom = nav->GetSyncOptionForceRom();
         const bool force_cover = nav->GetSyncOptionForceCover();
+        const bool background = nav->GetSyncOptionBackground();
         const size_t save_dir = nav->GetSyncOptionSaveDir();
 
         struct Row { const char* key; std::string value; };
-        const Row rows[4] = {
+        const Row rows[5] = {
             { "sync.option.force_rom",
               force_rom ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
             { "sync.option.force_cover",
               force_cover ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
+            { "sync.option.background",
+              background ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
             { "sync.option.saves",
               (save_dir == 1) ? romm::i18n::tr("sync.option.saves.upload")
               : (save_dir == 2) ? romm::i18n::tr("sync.option.saves.download")
@@ -210,10 +213,10 @@ namespace romm::ui {
         };
 
         const s32 row_h = 92;
-        for (size_t i = 0; i < 4; ++i) {
+        for (size_t i = 0; i < 5; ++i) {
             const s32 ry = body_y + (s32)i * (row_h + 12);
             const bool focused = (i == sel);
-            const bool is_start = (i == 3);
+            const bool is_start = (i == 4);
 
             pu::ui::Color border = focused ? highlight : pu::ui::Color(45, 50, 62, 255);
             pu::ui::Color bg = focused ? pu::ui::Color(85, 63, 152, 255)
