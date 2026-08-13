@@ -254,6 +254,9 @@ namespace romm::navigation {
                         sync.StartPlatformSync(sync_bulk_platform_slug, sync_bulk_platform_name,
                                                sync_bulk_games, opts);
                         sync_bulk_pending = false;
+                        // The batch is consumed: drop the marks so the grid
+                        // doesn't keep showing a stale selection afterwards.
+                        ClearBulkSelection();
                         std::cout << "[NAV] [SYNC] Starting platform sync slug="
                                   << sync_bulk_platform_slug
                                   << " games=" << sync_bulk_games.size() << std::endl;
@@ -447,25 +450,12 @@ namespace romm::navigation {
         return true;
     }
 
-    void NavigationManager::OpenPlatformSyncOptions() {
-        if (!model) return;
-        const auto& platforms = model->GetPlatforms();
-        if (loaded_platform_idx >= platforms.size()) return;
-
-        const auto& plat = platforms[loaded_platform_idx];
-        sync_bulk_platform_slug = plat.slug;
-        sync_bulk_platform_name = plat.name;
-        sync_bulk_games.clear();
-        for (const auto& g : plat.games) {
-            romm::model::SyncGameEntry e;
-            e.rom_id = g.id;
-            e.title = g.title;
-            sync_bulk_games.push_back(e);
-        }
-        if (sync_bulk_games.empty()) {
-            std::cerr << "[NAV] [SYNC] Platform has no games loaded yet" << std::endl;
-            return;
-        }
+    void NavigationManager::OpenBulkSyncOptions(const std::string& platform_slug,
+                                            const std::string& platform_name,
+                                            const std::vector<romm::model::SyncGameEntry>& games) {
+        sync_bulk_platform_slug = platform_slug;
+        sync_bulk_platform_name = platform_name;
+        sync_bulk_games = games;
         sync_bulk_pending = true;
         library_platform_sync_focused = false;
         sync_modal_active = true;
@@ -476,6 +466,26 @@ namespace romm::navigation {
         sync_opt_background = false;
         sync_opt_save_dir = 0;
         sync_conflict_selected_idx = 0;
+    }
+
+    void NavigationManager::OpenPlatformSyncOptions() {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (loaded_platform_idx >= platforms.size()) return;
+
+        const auto& plat = platforms[loaded_platform_idx];
+        std::vector<romm::model::SyncGameEntry> games;
+        for (const auto& g : plat.games) {
+            romm::model::SyncGameEntry e;
+            e.rom_id = g.id;
+            e.title = g.title;
+            games.push_back(e);
+        }
+        if (games.empty()) {
+            std::cerr << "[NAV] [SYNC] Platform has no games loaded yet" << std::endl;
+            return;
+        }
+        OpenBulkSyncOptions(plat.slug, plat.name, games);
         std::cout << "[NAV] [SYNC] Platform sync options opened for "
                   << sync_bulk_platform_name << " (" << sync_bulk_platform_slug
                   << "), games=" << sync_bulk_games.size() << std::endl;
@@ -780,10 +790,11 @@ namespace romm::navigation {
                     state_changed = true;
                 }
             }
-            // ZR syncs every selected game (ROM + saves + cover to the Tico folders),
-            // as a batch — the classic queue only moved ROMs and left covers
-            // and saves behind. Chosen over A-with-modifier because it can't be
-            // hit by accident while browsing.
+            // ZR opens the sync pre-flight for every selected game (ROM + saves +
+            // cover to the Tico folders), so batch options like "cover as
+            // platform background" can be toggled before anything runs.
+            // Chosen over A-with-modifier because it can't be hit by accident
+            // while browsing.
             else if (keys_down & HidNpadButton_ZR) {
                 if (GetBulkSelectionCount() > 0) {
                     std::vector<romm::model::SyncGameEntry> marked;
@@ -795,18 +806,9 @@ namespace romm::navigation {
                             marked.push_back(e);
                         }
                     }
-                    // Batch sync never prompts per-game: conflicts are skipped
-                    // and can be resolved later with the per-game Sync.
-                    romm::model::SyncManager::Instance().StartPlatformSync(
-                        current_platform.slug, current_platform.name, marked,
-                        romm::model::SyncOptions());
-                    sync_modal_active = true;
-                    sync_modal_mode = romm::navigation::SyncModalMode::Progress;
-                    sync_conflict_selected_idx = 0;
-                    sync_bulk_pending = false;
-                    std::cout << "[NAV] [ZR] Syncing " << marked.size()
+                    OpenBulkSyncOptions(current_platform.slug, current_platform.name, marked);
+                    std::cout << "[NAV] [ZR] Sync options opened for " << marked.size()
                               << " marked games of " << current_platform.name << std::endl;
-                    ClearBulkSelection();
                     state_changed = true;
                 }
             }

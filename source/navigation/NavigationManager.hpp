@@ -298,6 +298,12 @@ namespace romm::navigation {
         // collection (all loaded games). Shared by the sidebar button.
         void OpenPlatformSyncOptions();
 
+        // Opens the sync pre-flight options for an explicit game batch
+        // (marked games via ZR, or the whole loaded platform). The sync only
+        // starts when the user confirms.
+        void OpenBulkSyncOptions(const std::string& platform_slug, const std::string& platform_name,
+                                 const std::vector<romm::model::SyncGameEntry>& games);
+
         // X on the sidebar: mark/unmark every game of the platform under the
         // cursor. If its ROMs aren't fetched yet, loads it and auto-marks
         // everything when the fetch lands (ConsumePendingMarkPlatform).
