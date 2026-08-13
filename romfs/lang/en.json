@@ -7,7 +7,6 @@
   "menu.games": "Games",
   "menu.settings": "Settings",
   "hint.main_menu": "A Select   |   + Exit",
-  "hint.library": "A Select   |   B Back   |   X Mark   |   ZR Download marked   |   Y Menu   |   + Exit",
   "hint.grid_panel": "A  Open cover / Action      Up/Down  Move      B  Back",
   "hint.detail.cover": "A Enlarge   |   Down Sync   |   B Back   |   R/L Image",
   "hint.detail.panel": "A Sync   |   B Back / Library   |   R-Stick Scroll   |   R/L Image",
@@ -323,5 +322,11 @@
   "update.error.hash_mismatch": "SHA-256 hash mismatch",
   "update.error.rename_temp": "Failed to rename temporary download file",
   "update.error.backup_current": "Failed to backup current application executable",
-  "update.error.install": "Failed to install the new application executable"
+  "update.error.install": "Failed to install the new application executable",
+  "hint.library.seg.a": "A Select   |   B Back   |   ",
+  "hint.library.mark": "X Mark",
+  "hint.library.unmark": "X Unmark",
+  "hint.library.seg.b": "   |   ",
+  "hint.library.download_marked": "ZR Download marked",
+  "hint.library.seg.c": "   |   Y Menu   |   + Exit"
 }

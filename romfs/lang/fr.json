@@ -7,7 +7,6 @@
   "menu.games": "Jeux",
   "menu.settings": "Paramètres",
   "hint.main_menu": "A Sélectionner   |   + Quitter",
-  "hint.library": "A Sélectionner   |   B Retour   |   X Marquer   |   ZR Télécharger la sélection   |   Y Menu   |   + Quitter",
   "hint.grid_panel": "A  Ouvrir la jaquette / Action      Haut/Bas  Naviguer      B  Retour",
   "hint.detail.cover": "A Agrandir   |   Bas Sync   |   B Retour   |   R/L Image",
   "hint.detail.panel": "A Sync   |   B Retour / Bibliothèque   |   Stick R Défiler   |   R/L Image",
@@ -323,5 +322,11 @@
   "update.error.hash_mismatch": "Empreinte SHA-256 incorrecte",
   "update.error.rename_temp": "Impossible de renommer le fichier temporaire",
   "update.error.backup_current": "Impossible de sauvegarder l’exécutable actuel",
-  "update.error.install": "Impossible d’installer le nouvel exécutable"
+  "update.error.install": "Impossible d’installer le nouvel exécutable",
+  "hint.library.seg.a": "A Sélectionner   |   B Retour   |   ",
+  "hint.library.mark": "X Marquer",
+  "hint.library.unmark": "X Décocher",
+  "hint.library.seg.b": "   |   ",
+  "hint.library.download_marked": "ZR Télécharger la sélection",
+  "hint.library.seg.c": "   |   Y Menu   |   + Quitter"
 }
