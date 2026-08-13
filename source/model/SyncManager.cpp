@@ -43,14 +43,17 @@ namespace romm::model {
 
         // Copies one small file (cover art) to another path, creating the
         // destination's parent folder. Plain FILE I/O is fine here — covers
-        // are a few hundred KB at most.
+        // are a few hundred KB at most. The parent chain is created
+        // recursively (not a single mkdir): on a device where the Tico
+        // assets/backgrounds folder does not exist yet, a one-level mkdir
+        // silently fails and the copy is lost.
         bool CopyFile(const std::string& src, const std::string& dst) {
             FILE* in = fopen(src.c_str(), "rb");
             if (!in) return false;
 
             size_t slash = dst.find_last_of('/');
             if (slash != std::string::npos) {
-                mkdir(dst.substr(0, slash).c_str(), 0777);
+                RomPathManager::CreateFolderIfMissing(dst.substr(0, slash));
             }
 
             FILE* out = fopen(dst.c_str(), "wb");
@@ -1005,19 +1008,26 @@ namespace romm::model {
                              romm::i18n::format("sync.cover.ok", {{"path", cover_target}}));
                 }
             }
+        }
 
-            // Optional: reuse this cover as the platform background (one image
-            // per platform — the last synced game's cover wins).
-            if (options.use_cover_as_background && !cancel_requested_.load()) {
-                struct stat bg_check;
-                if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
-                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
-                    if (CopyFile(cover_target, bg_path)) {
-                        std::cout << "[SYNC] Platform background updated: " << bg_path << std::endl;
-                    } else {
-                        std::cerr << "[SYNC] Could not copy cover to background: "
-                                  << bg_path << std::endl;
-                    }
+        // Optional: reuse this cover as the platform background (one image
+        // per platform — the last synced game's cover wins).
+        //
+        // Deliberately OUTSIDE the cover stage's branches: it must run even
+        // when the cover was already on disk (skipped) or the server has no
+        // cover art for this game but an older cover file remains on disk.
+        // In a batch the last game decides what the platform shows, so gating
+        // this on any per-game condition silently lost backgrounds for whole
+        // platforms.
+        if (options.use_cover_as_background && !cancel_requested_.load()) {
+            struct stat bg_check;
+            if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
+                const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
+                if (CopyFile(cover_target, bg_path)) {
+                    std::cout << "[SYNC] Platform background updated: " << bg_path << std::endl;
+                } else {
+                    std::cerr << "[SYNC] Could not copy cover to background: "
+                              << bg_path << std::endl;
                 }
             }
         }

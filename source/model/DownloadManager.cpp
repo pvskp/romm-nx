@@ -1564,11 +1564,12 @@ namespace romm::model {
 
         std::string part_path = final_path + ".part";
 
-        // Ensure the file's parent exists.
+        // Ensure the file's parent exists (recursively — on a device where
+        // the Tico folder tree doesn't exist yet, a one-level mkdir silently
+        // fails and the whole sync stage fails).
         size_t slash = final_path.find_last_of('/');
         if (slash != std::string::npos) {
-            std::string parent = final_path.substr(0, slash);
-            mkdir(parent.c_str(), 0777);
+            RomPathManager::CreateFolderIfMissing(final_path.substr(0, slash));
         }
         // Fresh-write semantics: only the stale .part from a previous attempt
         // is removed now. The current file at `final_path` is left intact and
