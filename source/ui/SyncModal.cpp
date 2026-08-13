@@ -66,11 +66,8 @@ namespace romm::ui {
             row_y0 += 48;
         }
 
-        static const char* kStageKeys[] = {"sync.stage.rom", "sync.stage.saves",
-                                           "sync.stage.cover", "sync.stage.background"};
-
-        // The background stage only exists when the user picked the option,
-        // so the row count follows the snapshot instead of being fixed.
+        // Labels come from each stage's own enum: a saves-only run draws a
+        // single SAVES row (position 0), not a mislabeled ROM row.
         for (size_t i = 0; i < snap.stages.size(); ++i) {
             const auto& stage = snap.stages[i];
             const s32 ry = row_y0 + (s32)i * row_h;
@@ -78,7 +75,14 @@ namespace romm::ui {
             drawer->RenderRoundedRectangleFill(pu::ui::Color(28, 31, 38, 255),
                                                panel_x + 30, ry, panel_w - 60, row_h - 28, 10);
 
-            pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr(kStageKeys[i]), text_color);
+            const char* stage_key = "sync.stage.rom";
+            switch (stage.stage) {
+                case romm::model::SyncStage::Saves:      stage_key = "sync.stage.saves"; break;
+                case romm::model::SyncStage::Cover:      stage_key = "sync.stage.cover"; break;
+                case romm::model::SyncStage::Background: stage_key = "sync.stage.background"; break;
+                default: break;
+            }
+            pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr(stage_key), text_color);
             if (tex_label) {
                 drawer->RenderTexture(tex_label, panel_x + 50, ry + 20);
                 pu::ui::render::DeleteTexture(tex_label);

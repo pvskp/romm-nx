@@ -86,6 +86,10 @@ namespace romm::model {
         // Also write the (downloaded) cover as this game's platform background
         // (assets/backgrounds/<platform>/<game>.jpg, one file per game).
         bool use_cover_as_background = false;
+        // Save management only: skip the ROM, cover and background stages and
+        // run just the saves stage. Used by the Save Data screen's per-game
+        // and batch actions.
+        bool saves_only = false;
     };
 
     // One game's record inside sync_state.json. The fingerprint pairs the
@@ -146,6 +150,10 @@ namespace romm::model {
         void LoadSyncState();
         void SaveSyncState();
 
+        // Copy of the recorded sync-state entries, for the Save Data screen's
+        // local scan (it re-reads fingerprints and server anchors per game).
+        void GetSyncState(std::map<int, SyncStateEntry>& out) const;
+
         ~SyncManager();
 
     private:
@@ -161,7 +169,10 @@ namespace romm::model {
         // single-game and the platform-wide workers.
         void RunGameSync(const GameDetail& detail, const std::string& platform_slug,
                          const std::string& title, const SyncOptions& options);
-        void ResetStages(const std::string& title, bool with_background = false);
+        // Rebuilds the stage list for the running game. saves_only runs keep
+        // only the Saves stage (the progress modal draws whatever is there);
+        // with_background adds the Background stage when the option is on.
+        void ResetStages(const std::string& title, const SyncOptions& options);
         void Finish();
         void SetStage(SyncStage stage, SyncStageState state, const std::string& message);
         void SetWarning(const std::string& warning);
@@ -198,7 +209,7 @@ namespace romm::model {
         bool thread_started_ = false;
 
         std::map<int, SyncStateEntry> sync_state_;
-        std::mutex state_mutex_;
+        mutable std::mutex state_mutex_;
     };
 
 }

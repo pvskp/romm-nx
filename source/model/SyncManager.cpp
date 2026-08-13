@@ -716,20 +716,31 @@ namespace romm::model {
         }
     }
 
-    void SyncManager::ResetStages(const std::string& title, bool with_background) {
+    void SyncManager::ResetStages(const std::string& title, const SyncOptions& options) {
         std::lock_guard<std::mutex> lock(mutex_);
         snapshot_.title = title;
         snapshot_.warning.clear();
         snapshot_.conflict.active = false;
         snapshot_.stages.clear();
+        if (options.saves_only) {
+            // Save management runs a single stage; the progress modal renders
+            // whatever stages exist, so it shows just the Saves row.
+            snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
+            return;
+        }
         snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
         snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
         snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Pending, ""});
         // The background stage only exists when the user picked the option,
         // so the progress modal's row count matches what will actually run.
-        if (with_background) {
+        if (options.use_cover_as_background) {
             snapshot_.stages.push_back({SyncStage::Background, SyncStageState::Pending, ""});
         }
+    }
+
+    void SyncManager::GetSyncState(std::map<int, SyncStateEntry>& out) const {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        out = sync_state_;
     }
 
     void SyncManager::Worker(const GameDetail& detail, const std::string& platform_slug,
@@ -744,7 +755,7 @@ namespace romm::model {
             snapshot_.bulk_index = 0;
             snapshot_.bulk_total = 1;
         }
-        ResetStages(title, options.use_cover_as_background);
+        ResetStages(title, options);
         ScreenWakeManager::Instance().RequestUpdate();
         RunGameSync(detail, platform_slug, title, options);
         Finish();
@@ -773,7 +784,7 @@ namespace romm::model {
                 snapshot_.bulk_index = (int)i;
                 snapshot_.rom_id = games[i].rom_id;
             }
-            ResetStages(games[i].title, options.use_cover_as_background);
+            ResetStages(games[i].title, options);
             ScreenWakeManager::Instance().RequestUpdate();
             std::cout << "[SYNC] Platform sync game " << (i + 1) << "/" << games.size()
                       << " rom_id=" << games[i].rom_id << " title=" << games[i].title << std::endl;
@@ -816,9 +827,13 @@ namespace romm::model {
 
         auto& config = ConfigManager::Instance();
         if (!config.IsValid()) {
-            SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-            SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-            SetStage(SyncStage::Cover, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            if (options.saves_only) {
+                SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            } else {
+                SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+                SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+                SetStage(SyncStage::Cover, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            }
             return;
         }
 
@@ -832,24 +847,44 @@ namespace romm::model {
             files.push_back(rf);
         }
 
-        if (files.size() > 1) {
-            SetStage(SyncStage::Rom, SyncStageState::Unsupported,
-                     romm::i18n::tr("sync.multidisc"));
-            SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
-            SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            return;
-        }
-        if (files.empty()) {
-            SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.rom.no_files"));
-            SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
-            SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            return;
+        if (!options.saves_only) {
+            if (files.size() > 1) {
+                SetStage(SyncStage::Rom, SyncStageState::Unsupported,
+                         romm::i18n::tr("sync.multidisc"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
+                return;
+            }
+            if (files.empty()) {
+                SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.rom.no_files"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
+                return;
+            }
         }
 
-        const RomFileEntry& file = files.front();
         const std::string tico_slug = ResolveTicoPlatformSlug(platform_slug);
         auto& dl = DownloadManager::Instance();
-        const std::string rom_name = dl.SanitizeFilename(file.file_name);
+        std::string rom_name;
+        if (!files.empty()) {
+            rom_name = dl.SanitizeFilename(files.front().file_name);
+        } else if (options.saves_only) {
+            // Saves-only runs may have no file data in the detail; the sync
+            // record knows the ROM name it was synced under.
+            std::string recorded_rom_path;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto it = sync_state_.find(detail.rom_id);
+                if (it != sync_state_.end()) recorded_rom_path = it->second.rom_path;
+            }
+            size_t slash = recorded_rom_path.find_last_of('/');
+            if (slash != std::string::npos) rom_name = recorded_rom_path.substr(slash + 1);
+        }
+        if (rom_name.empty()) {
+            SetStage(SyncStage::Saves, SyncStageState::Skipped,
+                     romm::i18n::tr("sync.rom.no_files"));
+            return;
+        }
         const std::string rom_base = StripExtension(rom_name);
         const std::string rom_path = config.GetTicoRomPath(platform_slug) + rom_name;
         const std::string save_target = config.GetTicoSavePath(platform_slug) + rom_base +
@@ -858,90 +893,94 @@ namespace romm::model {
 
         // Tico cannot run compressed archives (7z, zip, ...) — warn the user
         // to extract the ROM (e.g. with DBI) before expecting it to launch.
-        if (SyncManager::IsCompressedArchive(rom_name)) {
+        // Saves-only runs never touch the ROM, so the warning is irrelevant.
+        if (!options.saves_only && SyncManager::IsCompressedArchive(rom_name)) {
             size_t dot = rom_name.find_last_of('.');
             std::string ext = (dot != std::string::npos) ? rom_name.substr(dot) : "";
             SetWarning(romm::i18n::format("sync.warning.compressed", {{"ext", ext}}));
         }
 
         // --- Stage 1: ROM -------------------------------------------------
-        SetStage(SyncStage::Rom, SyncStageState::Running, romm::i18n::tr("sync.rom.downloading"));
+        if (!options.saves_only) {
+            const RomFileEntry& file = files.front();
+            SetStage(SyncStage::Rom, SyncStageState::Running, romm::i18n::tr("sync.rom.downloading"));
 
-        if (cancel_requested_.load()) {
-            return;
-        }
-
-        // PSP accepts only its emulator's container formats (same whitelist as
-        // the classic download pipeline).
-        std::string rom_ext = "";
-        {
-            size_t d = rom_name.find_last_of('.');
-            if (d != std::string::npos) rom_ext = rom_name.substr(d);
-        }
-        std::string ext_lower = rom_ext;
-        for (char& c : ext_lower) c = (char)std::tolower((unsigned char)c);
-        if (tico_slug == "psp" && ext_lower != ".iso" && ext_lower != ".cso" && ext_lower != ".pbp") {
-            SetStage(SyncStage::Rom, SyncStageState::Unsupported,
-                     romm::i18n::tr("sync.rom.unsupported_ext"));
-            SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
-            SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
-            return;
-        }
-
-        bool rom_present = false;
-        long long rom_present_size = 0;
-        if (stat(rom_path.c_str(), &st) == 0 && st.st_size > 0) {
-            rom_present = true;
-            rom_present_size = (long long)st.st_size;
-        }
-
-        // Same-size ROMs are normally skipped; "force ROM" re-downloads them.
-        if (!options.force_rom && rom_present && rom_present_size == file.file_size_bytes) {
-            SetStage(SyncStage::Rom, SyncStageState::Skipped,
-                     romm::i18n::format("sync.rom.already", {{"path", rom_path}}));
-        } else {
-            // Different size (or absent): overwrite via DownloadToPath, which
-            // keeps the old file until the new one is fully validated.
-            if (rom_present) {
-                std::cout << "[SYNC] ROM exists with different size ("
-                          << rom_present_size << " != " << file.file_size_bytes
-                          << "), overwriting" << std::endl;
+            if (cancel_requested_.load()) {
+                return;
             }
 
-            std::string url = config.GetRommHost() + "/api/roms/" + std::to_string(file.id) +
-                              "/files/content/" +
-                              DownloadManager::EscapeUrlComponent(file.file_name);
-            std::map<std::string, std::string> headers = {
-                {"Authorization", "Bearer " + config.GetApiKey()}
-            };
+            // PSP accepts only its emulator's container formats (same whitelist as
+            // the classic download pipeline).
+            std::string rom_ext = "";
+            {
+                size_t d = rom_name.find_last_of('.');
+                if (d != std::string::npos) rom_ext = rom_name.substr(d);
+            }
+            std::string ext_lower = rom_ext;
+            for (char& c : ext_lower) c = (char)std::tolower((unsigned char)c);
+            if (tico_slug == "psp" && ext_lower != ".iso" && ext_lower != ".cso" && ext_lower != ".pbp") {
+                SetStage(SyncStage::Rom, SyncStageState::Unsupported,
+                         romm::i18n::tr("sync.rom.unsupported_ext"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
+                return;
+            }
 
-            DownloadManager::DownloadOutcome oc = dl.DownloadToPath(url, headers, rom_path, file.file_size_bytes);
-            if (!oc.success || cancel_requested_.load()) {
-                if (cancel_requested_.load()) {
-                    SetStage(SyncStage::Rom, SyncStageState::Skipped, romm::i18n::tr("sync.cancelled"));
-                } else {
-                    SetStage(SyncStage::Rom, SyncStageState::Failed,
-                             romm::i18n::format("sync.rom.failed", {{"error", oc.error_message}}));
-                }
+            bool rom_present = false;
+            long long rom_present_size = 0;
+            if (stat(rom_path.c_str(), &st) == 0 && st.st_size > 0) {
+                rom_present = true;
+                rom_present_size = (long long)st.st_size;
+            }
+
+            // Same-size ROMs are normally skipped; "force ROM" re-downloads them.
+            if (!options.force_rom && rom_present && rom_present_size == file.file_size_bytes) {
+                SetStage(SyncStage::Rom, SyncStageState::Skipped,
+                         romm::i18n::format("sync.rom.already", {{"path", rom_path}}));
             } else {
-                SetStage(SyncStage::Rom, SyncStageState::Ok,
-                         romm::i18n::format("sync.rom.ok", {{"path", rom_path}}));
+                // Different size (or absent): overwrite via DownloadToPath, which
+                // keeps the old file until the new one is fully validated.
+                if (rom_present) {
+                    std::cout << "[SYNC] ROM exists with different size ("
+                              << rom_present_size << " != " << file.file_size_bytes
+                              << "), overwriting" << std::endl;
+                }
+
+                std::string url = config.GetRommHost() + "/api/roms/" + std::to_string(file.id) +
+                                  "/files/content/" +
+                                  DownloadManager::EscapeUrlComponent(file.file_name);
+                std::map<std::string, std::string> headers = {
+                    {"Authorization", "Bearer " + config.GetApiKey()}
+                };
+
+                DownloadManager::DownloadOutcome oc = dl.DownloadToPath(url, headers, rom_path, file.file_size_bytes);
+                if (!oc.success || cancel_requested_.load()) {
+                    if (cancel_requested_.load()) {
+                        SetStage(SyncStage::Rom, SyncStageState::Skipped, romm::i18n::tr("sync.cancelled"));
+                    } else {
+                        SetStage(SyncStage::Rom, SyncStageState::Failed,
+                                 romm::i18n::format("sync.rom.failed", {{"error", oc.error_message}}));
+                    }
+                } else {
+                    SetStage(SyncStage::Rom, SyncStageState::Ok,
+                             romm::i18n::format("sync.rom.ok", {{"path", rom_path}}));
+                }
             }
-        }
 
-        if (cancel_requested_.load()) {
-            return;
-        }
+            if (cancel_requested_.load()) {
+                return;
+            }
 
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            SyncStateEntry& e = sync_state_[detail.rom_id];
-            e.rom_id = detail.rom_id;
-            e.platform = tico_slug;
-            e.rom_path = rom_path;
-            e.rom_size = file.file_size_bytes;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                SyncStateEntry& e = sync_state_[detail.rom_id];
+                e.rom_id = detail.rom_id;
+                e.platform = tico_slug;
+                e.rom_path = rom_path;
+                e.rom_size = file.file_size_bytes;
+            }
+            SaveSyncState();
         }
-        SaveSyncState();
 
         // --- Stage 2: Saves ----------------------------------------------
         RunSavesStage(detail.rom_id, tico_slug, save_target, options);
@@ -950,12 +989,14 @@ namespace romm::model {
         }
 
         // --- Stage 3: Cover ----------------------------------------------
-        std::string raw_cover = detail.path_cover_large;
-        if (raw_cover.empty()) raw_cover = detail.path_cover_small;
-        if (raw_cover.empty()) {
-            SetStage(SyncStage::Cover, SyncStageState::Skipped, romm::i18n::tr("sync.cover.missing"));
-        } else {
-            SetStage(SyncStage::Cover, SyncStageState::Running, romm::i18n::tr("sync.cover.downloading"));
+        // --- Stage 4: Background (optional) --------------------------------
+        if (!options.saves_only) {
+            std::string raw_cover = detail.path_cover_large;
+            if (raw_cover.empty()) raw_cover = detail.path_cover_small;
+            if (raw_cover.empty()) {
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, romm::i18n::tr("sync.cover.missing"));
+            } else {
+                SetStage(SyncStage::Cover, SyncStageState::Running, romm::i18n::tr("sync.cover.downloading"));
 
             std::string cover_url = raw_cover;
             if (cover_url.find("http") != 0) {
@@ -1036,6 +1077,7 @@ namespace romm::model {
                              romm::i18n::tr("sync.background.no_cover"));
                 }
             }
+        }
         }
     }
 
