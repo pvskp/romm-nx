@@ -141,15 +141,6 @@ namespace romm::ui {
         void CycleStartupVolume(int direction);
         void CycleAmbientVolume(int direction);
 
-        // --- Settings > Platforms -----------------------------------------
-        // Rebuilds the row list from the catalogue + the live model, then
-        // clamps the cursor if the list shrank.
-        void RefreshPlatformRows();
-        // Left/Right on a platform row: sets the state outright.
-        void ToggleSelectedPlatform(bool visible);
-        void SetPlatformVisibility(size_t platform_row_idx, bool visible);
-        void ApplyPlatformVisibility();
-
         static size_t GetOptionsCount(size_t cat_idx);
         static size_t GetCategoriesCount();
 

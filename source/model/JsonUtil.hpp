@@ -14,6 +14,11 @@ namespace romm::model {
         int id = 0;
         std::string name;
         std::string slug;
+        // How many ROMs the server counts on this platform. has_rom_count is
+        // false when the server doesn't report the field (older RomM), which
+        // the caller treats as "unknown" rather than "zero".
+        long long rom_count = 0;
+        bool has_rom_count = false;
     };
 
     struct RomEntry {

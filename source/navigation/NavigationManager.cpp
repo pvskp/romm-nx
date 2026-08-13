@@ -58,11 +58,7 @@ namespace romm::navigation {
     static std::string GetMenuEntryName(size_t idx) {
         switch (idx) {
             case 0: return "Games";
-            case 1: return "Installed";
-            case 2: return "Queue";
-            case 3: return "Saves";
-            case 4: return "File browser";
-            case 5: return "Settings";
+            case 1: return "Settings";
             default: return "Unknown";
         }
     }
@@ -497,7 +493,7 @@ namespace romm::navigation {
             // changelog/confirm UI there instead of duplicating it here.
             update_modal_active = false;
             current_screen = Screen::Settings;
-            selected_settings_category_idx = 6; // Updates
+            selected_settings_category_idx = 5; // Updates
             settings_focus = romm::ui::SettingsFocusArea::OptionList;
             // Land on the install row, not row 0 — row 0 cycles the update
             // channel, and the popup's A button means "take me to this
@@ -684,42 +680,22 @@ namespace romm::navigation {
 
         if (current_screen == Screen::MainMenu) {
             size_t old_idx = selected_menu_idx;
-            // Main Menu grid D-pad/Stick Navigation (6 items: Row 1: 0,1,2,3; Row 2: 4,5)
-            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                if (selected_menu_idx == 1 || selected_menu_idx == 2 || selected_menu_idx == 3) {
-                    selected_menu_idx--;
-                    state_changed = true;
-                } else if (selected_menu_idx == 5) {
-                    selected_menu_idx = 4;
+            // Main Menu navigation: two cards — 0 = Games, 1 = Settings.
+            if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                if (selected_menu_idx == 0) {
+                    selected_menu_idx = 1;
                     state_changed = true;
                 }
             }
-            else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                if (selected_menu_idx == 0 || selected_menu_idx == 1 || selected_menu_idx == 2) {
-                    selected_menu_idx++;
-                    state_changed = true;
-                } else if (selected_menu_idx == 4) {
-                    selected_menu_idx = 5;
+            else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                if (selected_menu_idx == 1) {
+                    selected_menu_idx = 0;
                     state_changed = true;
                 }
             }
-            else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                if (selected_menu_idx == 0 || selected_menu_idx == 1) {
-                    selected_menu_idx = 4; // Select File browser
-                    state_changed = true;
-                } else if (selected_menu_idx == 2 || selected_menu_idx == 3) {
-                    selected_menu_idx = 5; // Select Settings
-                    state_changed = true;
-                }
-            }
-            else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
-                if (selected_menu_idx == 4) {
-                    selected_menu_idx = 0; // Go up to Games (or 1)
-                    state_changed = true;
-                } else if (selected_menu_idx == 5) {
-                    selected_menu_idx = 2; // Go up to Queue (or 3)
-                    state_changed = true;
-                }
+            else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown) ||
+                     (keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                // Single row — nothing to move to vertically.
             }
             // Select item (A) - single press only
             else if (keys_down & HidNpadButton_A) {
@@ -734,19 +710,7 @@ namespace romm::navigation {
                     // Sidebar hover preview shows the first platform right away.
                     PreviewPlatform(0);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Library Screen" << std::endl;
-                } else if (selected_menu_idx == 1) { // Installed
-                    current_screen = Screen::Installed;
-                    state_changed = true;
-                    if (installed_layout) installed_layout->ForceRefresh();
-                    app->LoadLayout(installed_layout);
-                    std::cout << "[NAV] Opening Installed layout" << std::endl;
-                } else if (selected_menu_idx == 2) { // Queue
-                    current_screen = Screen::Queue;
-                    state_changed = true;
-                    if (queue_layout) queue_layout->ForceRefresh();
-                    app->LoadLayout(queue_layout);
-                    std::cout << "[NAV] Opening Queue layout" << std::endl;
-                } else if (selected_menu_idx == 5) { // Settings
+                } else { // Settings
                     current_screen = Screen::Settings;
                     selected_settings_category_idx = 0;
                     selected_settings_option_idx = 0;
@@ -757,17 +721,6 @@ namespace romm::navigation {
                     }
                     app->LoadLayout(settings_layout);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Settings Screen" << std::endl;
-                } else if (selected_menu_idx == 4) { // File browser
-                    current_screen = Screen::FileBrowser;
-                    state_changed = true;
-                    if (!file_browser_layout) {
-                        file_browser_layout = std::make_shared<romm::ui::FileBrowserLayout>(shared_from_this());
-                    }
-                    if (file_browser_layout) file_browser_layout->ForceRefresh();
-                    app->LoadLayout(file_browser_layout);
-                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> File Browser Screen" << std::endl;
-                } else {
-                    std::cout << "[LOG] Not implemented yet" << std::endl;
                 }
             }
 
@@ -1419,10 +1372,7 @@ namespace romm::navigation {
                     // row/category (Download Sound Pack is now a single
                     // A-press action, not browsable).
                     else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                        if (selected_settings_category_idx == 4 && settings_layout) {
-                            settings_layout->ToggleSelectedPlatform(false); // Left = Hidden
-                            state_changed = true;
-                        } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
+                        if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
                             settings_layout->CycleStartupSound(-1);
                             state_changed = true;
                         } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 3 && settings_layout) {
@@ -1437,10 +1387,7 @@ namespace romm::navigation {
                         }
                     }
                     else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                        if (selected_settings_category_idx == 4 && settings_layout) {
-                            settings_layout->ToggleSelectedPlatform(true); // Right = Shown
-                            state_changed = true;
-                        } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
+                        if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
                             settings_layout->CycleStartupSound(1);
                             state_changed = true;
                         } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 3 && settings_layout) {

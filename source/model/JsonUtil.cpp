@@ -196,6 +196,7 @@ bool jsonParsePlatformList(const std::string& json, std::vector<PlatformEntry>& 
                 platform.name = "Platform #" + std::to_string(platform.id);
             }
             jsonExtractString(block, "slug", platform.slug);
+            platform.has_rom_count = jsonExtractLongLong(block, "rom_count", platform.rom_count);
             out.push_back(platform);
         }
 

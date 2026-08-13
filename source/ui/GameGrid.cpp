@@ -261,20 +261,8 @@ namespace romm::ui {
             return;
         }
 
-        // Platforms fetched fine, but Settings > Platforms hid every one of
-        // them. Draw that as its own state rather than falling through to a
-        // ROMs message about a platform that isn't there.
-        if (model->GetPlatforms().empty() && !model->GetAllPlatforms().empty()) {
-            ClearStatusTex();
-            ClearInfoTextures();
-            filtered_games.clear();
-            filter_generation++;
-            ClearListTextures();
-            ClearPanelTextures();
-            status_tex = pu::ui::render::RenderText("Ubuntu@37",
-                romm::i18n::tr("status.all_platforms_hidden"), text_color);
-            return;
-        }
+        // Platforms fetched fine — the sidebar shows every platform the server
+        // reports, so there is no "all hidden" state.
 
         auto roms_state = model->GetRomsState();
 

@@ -202,61 +202,10 @@ namespace romm::ui {
             "settings.category.theme",
             "settings.category.connection",
             "settings.category.rom_paths",
-            "settings.category.platforms",
             "settings.category.advanced",
             "settings.category.updates",
             "settings.category.debug"
         };
-
-        // --- Settings > Platforms ------------------------------------------
-        // One row per canonical platform: everything romm-nx ships knowledge of
-        // (GetPlatformCatalog) merged with whatever the connected server
-        // returned, de-duplicated by NormalizePlatformId so "ps1", "psx" and
-        // "PlayStation" can never appear as three rows.
-        struct PlatformVisibilityRow {
-            std::string canonical_id;
-            std::string display_name;
-        };
-
-        // The two fixed action rows that sit above the platform list.
-        constexpr size_t kPlatformActionRows = 2; // 0 = Show All, 1 = Reset Defaults
-
-        std::vector<PlatformVisibilityRow> g_platform_rows;
-
-        void RebuildPlatformRows(const std::shared_ptr<romm::model::DataModel>& model) {
-            std::vector<PlatformVisibilityRow> rows;
-
-            auto push = [&rows](const std::string& id, const std::string& name) {
-                if (id.empty()) return;
-                for (const auto& existing : rows) {
-                    if (existing.canonical_id == id) return; // alias of a row we already have
-                }
-                rows.push_back({id, name});
-            };
-
-            for (const auto& entry : romm::model::GetPlatformCatalog()) {
-                push(entry.id, entry.display_name);
-            }
-            if (model) {
-                // GetAllPlatforms(), not GetPlatforms(): the filtered list is
-                // precisely the one that can't show you what to un-hide.
-                for (const auto& plat : model->GetAllPlatforms()) {
-                    const std::string id = romm::model::ResolvePlatformIdentity(plat.slug, plat.name);
-                    push(id, romm::model::GetPlatformDisplayName(id, plat.name));
-                }
-            }
-
-            g_platform_rows = std::move(rows);
-        }
-
-        const std::vector<PlatformVisibilityRow>& PlatformRows() {
-            // GetOptionsCount() is static and can be asked for the row count
-            // before any refresh has run; the catalogue alone is a valid answer.
-            if (g_platform_rows.empty()) {
-                RebuildPlatformRows(nullptr);
-            }
-            return g_platform_rows;
-        }
 
     }
 
@@ -554,10 +503,7 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.rom_paths.base_dir"),
                                truncatePath(config.GetRomsBaseDir()), true});
         }
-        else if (active_cat == 4) { // Platforms
-            // Custom drawing logic handles this (needs its own scroll window)
-        }
-        else if (active_cat == 5) { // Advanced
+        else if (active_cat == 4) { // Advanced
             std::string cover_sz = romm::i18n::tr("settings.advanced.calculating");
             std::string total_sz = cover_sz;
             if (!calculating_cache) {
@@ -583,7 +529,7 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.advanced.max_age"),
                                romm::i18n::format("settings.advanced.age_value", {{"days", std::to_string(config.GetMaxAgeDays())}})});
         }
-        else if (active_cat == 6) { // Updates
+        else if (active_cat == 5) { // Updates
             // Rows are the things you can act on, and nothing else — every row
             // value here is a short word or a version. The read-only detail
             // (build, installed channel, manifest URL, status, changelog) is
@@ -614,7 +560,7 @@ namespace romm::ui {
                                    romm::i18n::tr("settings.updates.trigger_restore"), true});
             }
         }
-        else if (active_cat == 7) { // Debug
+        else if (active_cat == 6) { // Debug
             options.push_back({romm::i18n::tr("settings.debug.build_version"),
                                "v" + romm::ROMM_NX_VERSION + " (" + std::to_string(romm::ROMM_NX_VERSION_CODE) + ")"});
             // Both channels, unconditionally: which one is selected and which
@@ -641,8 +587,8 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.debug.export"), romm::i18n::tr("settings.debug.trigger_export"), true});
         }
 
-        if (active_cat != 4) {
-            // Draw Options List (real rows only)
+        // Draw Options List (real rows only)
+        {
             s32 opt_start_y = y_coord + 40;
             s32 opt_row_h = 75;
             s32 opt_spacing = 15;
@@ -739,7 +685,7 @@ namespace romm::ui {
                 }
             }
 
-            if (active_cat == 6) {
+            if (active_cat == 5) {
                 // Update info panel: everything read-only, in the space left
                 // under the rows. Its top follows the row count and every line
                 // is gated on a hard bottom limit, so it can neither sit on top
@@ -875,113 +821,6 @@ namespace romm::ui {
                     }
                 }
             }
-        } else if (active_cat == 4) {
-            // Draw Custom Platforms layout.
-            //
-            // Same row visuals as the generic option list, but with its own
-            // scroll window: the row count is open-ended (catalogue + whatever
-            // the server reports) and can't be assumed to fit the panel.
-            s32 rows_start_y = y_coord + 40;
-            s32 row_h = 75;
-            s32 row_spacing = 15;
-            s32 row_w = opt_panel_w - 60;
-            s32 rx = opt_panel_x + 30;
-
-            const auto& plat_rows = PlatformRows();
-            const size_t total_rows = kPlatformActionRows + plat_rows.size();
-
-            s32 available_h = h - 80;
-            size_t visible_count = (size_t)std::max(1, (available_h + row_spacing) / (row_h + row_spacing));
-            if (visible_count > total_rows) visible_count = total_rows;
-
-            size_t selected_row = std::min(active_opt, total_rows > 0 ? total_rows - 1 : 0);
-            if (selected_row < platform_scroll_offset) {
-                platform_scroll_offset = selected_row;
-            } else if (selected_row >= platform_scroll_offset + visible_count) {
-                platform_scroll_offset = selected_row - visible_count + 1;
-            }
-            if (platform_scroll_offset + visible_count > total_rows) {
-                platform_scroll_offset = (total_rows > visible_count) ? (total_rows - visible_count) : 0;
-            }
-
-            for (size_t i = platform_scroll_offset; i < platform_scroll_offset + visible_count; ++i) {
-                s32 ry = rows_start_y + (s32)(i - platform_scroll_offset) * (row_h + row_spacing);
-                bool is_selected = (i == selected_row && !is_cat_focused);
-
-                pu::ui::Color r_bg;
-                pu::ui::Color r_border;
-                s32 r_border_w = 2;
-
-                if (is_selected) {
-                    r_bg = pu::ui::Color(85, 63, 152, 255);       // Violet highlight capsule
-                    r_border = pu::ui::Color(230, 199, 167, 255); // Cream border
-                    r_border_w = 3;
-                } else {
-                    r_bg = pu::ui::Color(16, 18, 22, 255);        // Web Dark Slate
-                    r_border = pu::ui::Color(45, 50, 62, 255);    // Slate Border Grey
-                }
-
-                drawer->RenderRoundedRectangleFill(r_border, rx, ry, row_w, row_h, 8);
-                drawer->RenderRoundedRectangleFill(r_bg, rx + r_border_w, ry + r_border_w, row_w - (r_border_w * 2), row_h - (r_border_w * 2), 6);
-
-                std::string label;
-                std::string value;
-                pu::ui::Color value_color(190, 180, 225, 255);
-
-                if (i == 0) {
-                    label = romm::i18n::tr("settings.platforms.show_all");
-                    value = romm::i18n::tr("common.trigger");
-                    value_color = pu::ui::Color(230, 199, 167, 255); // Cream = action
-                } else if (i == 1) {
-                    label = romm::i18n::tr("settings.platforms.reset_defaults");
-                    value = romm::i18n::tr("common.trigger");
-                    value_color = pu::ui::Color(230, 199, 167, 255);
-                } else {
-                    const auto& row = plat_rows[i - kPlatformActionRows];
-                    const bool shown = config.IsPlatformVisible(row.canonical_id);
-                    // Platform name: catalogue/RomM identity, never translated.
-                    label = row.display_name;
-                    value = romm::i18n::tr(shown ? "settings.platforms.shown" : "settings.platforms.hidden");
-                    value_color = shown ? pu::ui::Color(46, 204, 113, 255)   // Green
-                                        : pu::ui::Color(140, 140, 150, 255); // Muted grey
-                }
-
-                auto label_tex = pu::ui::render::RenderText("Ubuntu@24", label, pu::ui::Color(237, 229, 251, 255));
-                if (label_tex) {
-                    s32 th = pu::ui::render::GetTextureHeight(label_tex);
-                    drawer->RenderTexture(label_tex, rx + 25, ry + (row_h - th) / 2);
-                    pu::ui::render::DeleteTexture(label_tex);
-                }
-
-                auto val_tex = pu::ui::render::RenderText("Ubuntu@24", value, value_color);
-                if (val_tex) {
-                    s32 tw = pu::ui::render::GetTextureWidth(val_tex);
-                    s32 th = pu::ui::render::GetTextureHeight(val_tex);
-                    drawer->RenderTexture(val_tex, rx + row_w - tw - 25, ry + (row_h - th) / 2);
-                    pu::ui::render::DeleteTexture(val_tex);
-                }
-            }
-
-            // Scroll affordances, only when there's more off-screen.
-            {
-                pu::ui::Color arrow_clr(190, 180, 225, 200);
-                if (platform_scroll_offset > 0) {
-                    auto up_tex = pu::ui::render::RenderText("Orbitron@24", "^", arrow_clr);
-                    if (up_tex) {
-                        s32 tw = pu::ui::render::GetTextureWidth(up_tex);
-                        drawer->RenderTexture(up_tex, opt_panel_x + opt_panel_w - 22 - tw, y_coord + 12);
-                        pu::ui::render::DeleteTexture(up_tex);
-                    }
-                }
-                if (platform_scroll_offset + visible_count < total_rows) {
-                    auto down_tex = pu::ui::render::RenderText("Orbitron@24", "v", arrow_clr);
-                    if (down_tex) {
-                        s32 tw = pu::ui::render::GetTextureWidth(down_tex);
-                        drawer->RenderTexture(down_tex, opt_panel_x + opt_panel_w - 22 - tw, y_coord + h - 42);
-                        pu::ui::render::DeleteTexture(down_tex);
-                    }
-                }
-            }
         }
     }
 
@@ -1017,70 +856,11 @@ namespace romm::ui {
         std::cout << "[SETTINGS] Opened" << std::endl;
     }
 
-    void SettingsLayout::OnSelectionUpdated() {
-        auto nav = nav_mgr.lock();
-        if (!nav) return;
-        if (nav->GetSelectedSettingsCategoryIdx() == 4) {
-            RefreshPlatformRows();
-        }
-    }
+    void SettingsLayout::OnSelectionUpdated() {}
 
     void SettingsLayout::RefreshConfig() {
         if (card) {
             card->RefreshConfigTextures();
-        }
-        RefreshPlatformRows();
-    }
-
-    // Rebuilt from the live model rather than cached once: platforms can land
-    // after the Settings screen is already open (the fetch is async), and a
-    // server the user just re-pointed at can report a different set entirely.
-    void SettingsLayout::RefreshPlatformRows() {
-        auto nav = nav_mgr.lock();
-        RebuildPlatformRows(nav ? nav->GetModel() : nullptr);
-
-        // The list just changed size under a cursor that may have been near its
-        // end — clamp before anything indexes with it.
-        if (nav && nav->GetSelectedSettingsCategoryIdx() == 4) {
-            const size_t count = kPlatformActionRows + PlatformRows().size();
-            if (count > 0 && nav->GetSelectedSettingsOptionIdx() >= count) {
-                nav->SetSelectedSettingsOptionIdx(count - 1);
-            }
-        }
-    }
-
-    // A on a platform row toggles; Left/Right set it outright, matching how the
-    // other Left/Right rows in Settings behave (deterministic per direction
-    // rather than direction-insensitive cycling).
-    void SettingsLayout::SetPlatformVisibility(size_t platform_row_idx, bool visible) {
-        const auto& plat_rows = PlatformRows();
-        if (platform_row_idx >= plat_rows.size()) return;
-
-        auto& config = romm::model::ConfigManager::Instance();
-        const auto& row = plat_rows[platform_row_idx];
-        if (config.IsPlatformVisible(row.canonical_id) == visible) return; // nothing to write
-
-        config.SetPlatformVisible(row.canonical_id, visible);
-        config.Save();
-        std::cout << "[PLATFORMS] platform=" << row.canonical_id
-                  << " visible=" << (visible ? "true" : "false") << std::endl;
-        ApplyPlatformVisibility();
-    }
-
-    void SettingsLayout::ToggleSelectedPlatform(bool visible) {
-        auto nav = nav_mgr.lock();
-        if (!nav) return;
-        const size_t opt_idx = nav->GetSelectedSettingsOptionIdx();
-        if (opt_idx < kPlatformActionRows) return; // Show All / Reset Defaults aren't toggles
-        SetPlatformVisibility(opt_idx - kPlatformActionRows, visible);
-    }
-
-    // Re-filters the platform browser immediately, so leaving Settings shows
-    // the new list without a refetch. Config is already saved by the caller.
-    void SettingsLayout::ApplyPlatformVisibility() {
-        auto nav = nav_mgr.lock();
-        if (nav) {
-            nav->ApplyPlatformVisibilityChange();
         }
     }
 
@@ -1090,11 +870,6 @@ namespace romm::ui {
 
         if (nav->GetSelectedSettingsCategoryIdx() == 3 && focus != SettingsFocusArea::CategoryList) {
             hint_text->SetText(romm::i18n::tr("hint.settings.rompath.base"));
-            return;
-        }
-
-        if (nav->GetSelectedSettingsCategoryIdx() == 4 && focus != SettingsFocusArea::CategoryList) {
-            hint_text->SetText(romm::i18n::tr("hint.settings.platforms"));
             return;
         }
 
@@ -1248,24 +1023,7 @@ namespace romm::ui {
                 EditBaseDirectory();
             }
         }
-        else if (cat_idx == 4) { // Platforms
-            const auto& plat_rows = PlatformRows();
-            if (opt_idx == 0) { // Show All
-                config.ShowAllPlatforms();
-                config.Save();
-                std::cout << "[PLATFORMS] Show All: every known platform is now visible" << std::endl;
-                ApplyPlatformVisibility();
-            } else if (opt_idx == 1) { // Reset Defaults
-                config.ResetPlatformVisibilityDefaults();
-                config.Save();
-                std::cout << "[PLATFORMS] Reset to default visibility" << std::endl;
-                ApplyPlatformVisibility();
-            } else if (opt_idx - kPlatformActionRows < plat_rows.size()) {
-                SetPlatformVisibility(opt_idx - kPlatformActionRows,
-                                      !config.IsPlatformVisible(plat_rows[opt_idx - kPlatformActionRows].canonical_id));
-            }
-        }
-        else if (cat_idx == 5) { // Advanced
+        else if (cat_idx == 4) { // Advanced
             if (opt_idx == 2) {
                 confirm_modal->Show(
                     romm::i18n::tr("settings.confirm.clear_cover.title"),
@@ -1324,7 +1082,7 @@ namespace romm::ui {
                 }
             }
         }
-        else if (cat_idx == 6) { // Updates
+        else if (cat_idx == 5) { // Updates
             // Dispatched by row index rather than by rebuilding a shadow copy
             // of the option list and matching on its labels — those labels are
             // translated now, so string comparison would silently stop matching
@@ -1400,7 +1158,7 @@ namespace romm::ui {
                 );
             }
         }
-        else if (cat_idx == 7) { // Debug
+        else if (cat_idx == 6) { // Debug
             // Rows 0-6 are read-only diagnostics (build, both update channels,
             // config path, index count, active download, queue); Export is last.
             if (opt_idx == 7) {
@@ -1480,12 +1238,8 @@ namespace romm::ui {
             case 1: return 7; // Theme
             case 2: return 3; // Connection
             case 3: return 1; // ROM Paths (base directory)
-            // Platforms: Show All + Reset Defaults + one row per canonical
-            // platform. Grows with whatever the server reports, so it's derived
-            // rather than a literal.
-            case 4: return kPlatformActionRows + PlatformRows().size();
-            case 5: return 7; // Advanced
-            case 6: { // Updates
+            case 4: return 7; // Advanced
+            case 5: { // Updates
                 size_t count = 3; // Channel, Check on startup, Check for updates
                 auto state = romm::model::UpdateManager::Instance().GetState();
                 if (state == romm::model::UpdateState::UpdateAvailable) {
@@ -1496,7 +1250,7 @@ namespace romm::ui {
                 }
                 return count;
             }
-            case 7: return 8; // Debug (build, 2 channels, config path, index, active dl, queue, export)
+            case 6: return 8; // Debug (build, 2 channels, config path, index, active dl, queue, export)
             default: return 0;
         }
     }

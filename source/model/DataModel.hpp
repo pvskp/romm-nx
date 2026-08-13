@@ -108,6 +108,12 @@ namespace romm::model {
         std::string slug;
         std::vector<Game> games;
         ApiState roms_state = ApiState::Idle;
+
+        // ROM count reported by the server (read at fetch time so the sidebar
+        // can show only platforms that actually carry ROMs). has_rom_count is
+        // false for servers that don't report the field.
+        long long rom_count = 0;
+        bool has_rom_count = false;
     };
 
     enum class DetailLoadState {

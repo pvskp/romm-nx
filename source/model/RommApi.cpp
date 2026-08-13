@@ -36,6 +36,8 @@ namespace romm::model {
                         p.name = entry.name;
                         p.id = std::to_string(entry.id);
                         p.slug = entry.slug;
+                        p.rom_count = entry.rom_count;
+                        p.has_rom_count = entry.has_rom_count;
                         result->platforms.push_back(p);
                     }
                 } else {

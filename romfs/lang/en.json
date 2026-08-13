@@ -18,10 +18,6 @@
 
   "menu.title": "Menu",
   "menu.games": "Games",
-  "menu.installed": "Installed",
-  "menu.queue": "Queue",
-  "menu.saves": "Saves",
-  "menu.file_browser": "File browser",
   "menu.settings": "Settings",
 
   "hint.main_menu": "A Select   |   + Exit",
@@ -40,7 +36,6 @@
   "hint.queue.remove": "A Remove   |   X Clear Completed   |   B Back",
   "hint.settings.categories": "D-Pad Choose Tab   |   A Open   |   B Back",
   "hint.settings.options": "D-Pad Move   |   A Select   |   B Tabs",
-  "hint.settings.platforms": "D-Pad Move   |   A Toggle   |   Left Hide / Right Show   |   B Tabs",
   "hint.settings.rompath.base": "D-Pad Navigate   |   A Edit Base Directory   |   B Tabs",
   "hint.modal.confirm_cancel": "A Confirm        B Cancel",
   "hint.modal.uninstall": "A Confirm         B Cancel",
@@ -57,8 +52,6 @@
   "status.select_platform": "Select a platform and press A to load ROMs",
   "status.no_games": "No games found",
   "status.no_platforms": "No platforms found",
-  "status.all_platforms_hidden": "All platforms are hidden. Enable one in Settings > Platforms.",
-  "status.all_platforms_hidden_short": "All platforms hidden\n(Settings > Platforms)",
   "status.initializing": "Initializing...",
   "status.no_search_match": "No games match \"{query}\"   —   press X to edit",
 
@@ -221,7 +214,6 @@
   "settings.category.theme": "Theme",
   "settings.category.connection": "Connection",
   "settings.category.rom_paths": "ROM Paths",
-  "settings.category.platforms": "Platforms",
   "settings.category.advanced": "Advanced",
   "settings.category.updates": "Updates",
   "settings.category.debug": "Debug",
@@ -283,10 +275,6 @@
   "settings.path_status.readonly": "— Read-only",
   "settings.path_status.coming_later": "— Coming later",
 
-  "settings.platforms.show_all": "Show All",
-  "settings.platforms.reset_defaults": "Reset Defaults",
-  "settings.platforms.shown": "Shown",
-  "settings.platforms.hidden": "Hidden",
 
   "settings.advanced.cover_cache_size": "Cover cache size",
   "settings.advanced.total_cache_size": "Total cache size",

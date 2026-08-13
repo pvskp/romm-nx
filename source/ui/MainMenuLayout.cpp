@@ -13,13 +13,11 @@ namespace romm::ui {
 
     // Card order is load-bearing (NavigationManager indexes menu entries by
     // position), so the keys live in one ordered table rather than being spread
-    // across the constructor and the update-badge check below.
+    // across the constructor and the update-badge check below. The Installed /
+    // Queue / Saves / File browser entries were dropped: the Games screen
+    // manages every ROM (installed or not), and Settings stays for config.
     const char* const MenuGrid::kItemKeys[] = {
         "menu.games",
-        "menu.installed",
-        "menu.queue",
-        "menu.saves",
-        "menu.file_browser",
         "menu.settings"
     };
 
@@ -46,7 +44,7 @@ namespace romm::ui {
             // while giving longer translations ("File d'attente") the room they
             // need. RenderText's width argument truncates rather than wraps, so
             // a too-small limit shows an ellipsis instead of the label.
-            s32 limit_w = (i < 4) ? 340 : 720;
+            s32 limit_w = 340;
             const std::string label = romm::i18n::tr(kItemKeys[i]);
             pu::sdl2::Texture sel_tex = pu::ui::render::RenderText(font_name, label, selected_clr, limit_w);
             pu::sdl2::Texture unsel_tex = pu::ui::render::RenderText(font_name, label, unselected_clr, limit_w);
@@ -78,37 +76,16 @@ namespace romm::ui {
 
         size_t selected_menu_idx = nav->GetSelectedMenuIdx();
 
-        // Row 1: 4 cards, size 360 x 320
-        s32 row1_y = y_coord + 30;
-        s32 row1_h = 320;
-        s32 row1_w = 360;
-        s32 row1_spacing = 50;
-        s32 row1_start_x = x_coord + 165;
-
-        // Row 2: 2 cards, size 770 x 160
-        s32 row2_y = row1_y + row1_h + 40;
-        s32 row2_h = 160;
-        s32 row2_w = 770;
-        s32 row2_spacing = 50;
-        s32 row2_start_x = x_coord + 165;
+        // Single row of cards, centered: Games and Settings.
+        s32 card_w = 360;
+        s32 card_h = 320;
+        s32 spacing = 50;
+        s32 row_y = y_coord + 100;
+        s32 total_w = (s32)GetItemCount() * (card_w + spacing) - spacing;
+        s32 start_x = x_coord + (w - total_w) / 2;
 
         for (size_t i = 0; i < GetItemCount(); ++i) {
-            s32 card_x = 0;
-            s32 card_y = 0;
-            s32 card_w_val = 0;
-            s32 card_h_val = 0;
-
-            if (i < 4) { // Row 1: 0, 1, 2, 3
-                card_x = row1_start_x + i * (row1_w + row1_spacing);
-                card_y = row1_y;
-                card_w_val = row1_w;
-                card_h_val = row1_h;
-            } else { // Row 2: 4, 5
-                card_x = row2_start_x + (i - 4) * (row2_w + row2_spacing);
-                card_y = row2_y;
-                card_w_val = row2_w;
-                card_h_val = row2_h;
-            }
+            s32 card_x = start_x + (s32)i * (card_w + spacing);
 
             bool is_selected = (i == selected_menu_idx);
 
@@ -127,10 +104,10 @@ namespace romm::ui {
 
             // Draw card border and background
             if (border_width > 0) {
-                drawer->RenderRoundedRectangleFill(border_color, card_x, card_y, card_w_val, card_h_val, 16);
-                drawer->RenderRoundedRectangleFill(fill_color, card_x + border_width, card_y + border_width, card_w_val - (border_width * 2), card_h_val - (border_width * 2), 12);
+                drawer->RenderRoundedRectangleFill(border_color, card_x, row_y, card_w, card_h, 16);
+                drawer->RenderRoundedRectangleFill(fill_color, card_x + border_width, row_y + border_width, card_w - (border_width * 2), card_h - (border_width * 2), 12);
             } else {
-                drawer->RenderRoundedRectangleFill(fill_color, card_x, card_y, card_w_val, card_h_val, 16);
+                drawer->RenderRoundedRectangleFill(fill_color, card_x, row_y, card_w, card_h, 16);
             }
 
             // Draw centered card text
@@ -138,8 +115,8 @@ namespace romm::ui {
             s32 text_w = pu::ui::render::GetTextureWidth(text_tex);
             s32 text_h = pu::ui::render::GetTextureHeight(text_tex);
 
-            s32 tx = card_x + (card_w_val - text_w) / 2;
-            s32 ty = card_y + (card_h_val - text_h) / 2;
+            s32 tx = card_x + (card_w - text_w) / 2;
+            s32 ty = row_y + (card_h - text_h) / 2;
 
             drawer->RenderTexture(text_tex, tx, ty);
 
@@ -147,7 +124,7 @@ namespace romm::ui {
             if (std::string(kItemKeys[i]) == "menu.settings" &&
                 romm::model::UpdateManager::Instance().GetState() == romm::model::UpdateState::UpdateAvailable) {
                 s32 dot_radius = 10;
-                drawer->RenderCircleFill(pu::ui::Color(231, 76, 60, 255), card_x + card_w_val - dot_radius - 14, card_y + dot_radius + 14, dot_radius);
+                drawer->RenderCircleFill(pu::ui::Color(231, 76, 60, 255), card_x + card_w - dot_radius - 14, row_y + dot_radius + 14, dot_radius);
             }
         }
     }
