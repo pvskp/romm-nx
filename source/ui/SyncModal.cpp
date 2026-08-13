@@ -21,7 +21,7 @@ namespace romm::ui {
         pu::ui::Color state_skip(170, 170, 190, 255);
 
         s32 panel_w = 900;
-        s32 panel_h = 620;
+        s32 panel_h = 780; // up to four stage rows + warning banner + hint
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
@@ -66,9 +66,12 @@ namespace romm::ui {
             row_y0 += 48;
         }
 
-        static const char* kStageKeys[] = {"sync.stage.rom", "sync.stage.saves", "sync.stage.cover"};
+        static const char* kStageKeys[] = {"sync.stage.rom", "sync.stage.saves",
+                                           "sync.stage.cover", "sync.stage.background"};
 
-        for (size_t i = 0; i < snap.stages.size() && i < 3; ++i) {
+        // The background stage only exists when the user picked the option,
+        // so the row count follows the snapshot instead of being fixed.
+        for (size_t i = 0; i < snap.stages.size(); ++i) {
             const auto& stage = snap.stages[i];
             const s32 ry = row_y0 + (s32)i * row_h;
 

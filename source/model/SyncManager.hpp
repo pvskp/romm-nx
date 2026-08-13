@@ -11,8 +11,9 @@
 
 namespace romm::model {
 
-    // The three steps of a per-game sync, in execution order.
-    enum class SyncStage { Rom, Saves, Cover };
+    // The steps of a per-game sync, in execution order. Background only
+    // exists when the "cover as platform background" option is on.
+    enum class SyncStage { Rom, Saves, Cover, Background };
 
     enum class SyncStageState {
         Pending,
@@ -160,7 +161,7 @@ namespace romm::model {
         // single-game and the platform-wide workers.
         void RunGameSync(const GameDetail& detail, const std::string& platform_slug,
                          const std::string& title, const SyncOptions& options);
-        void ResetStages(const std::string& title);
+        void ResetStages(const std::string& title, bool with_background = false);
         void Finish();
         void SetStage(SyncStage stage, SyncStageState state, const std::string& message);
         void SetWarning(const std::string& warning);

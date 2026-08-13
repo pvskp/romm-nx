@@ -716,7 +716,7 @@ namespace romm::model {
         }
     }
 
-    void SyncManager::ResetStages(const std::string& title) {
+    void SyncManager::ResetStages(const std::string& title, bool with_background) {
         std::lock_guard<std::mutex> lock(mutex_);
         snapshot_.title = title;
         snapshot_.warning.clear();
@@ -725,6 +725,11 @@ namespace romm::model {
         snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
         snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
         snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Pending, ""});
+        // The background stage only exists when the user picked the option,
+        // so the progress modal's row count matches what will actually run.
+        if (with_background) {
+            snapshot_.stages.push_back({SyncStage::Background, SyncStageState::Pending, ""});
+        }
     }
 
     void SyncManager::Worker(const GameDetail& detail, const std::string& platform_slug,
@@ -739,7 +744,7 @@ namespace romm::model {
             snapshot_.bulk_index = 0;
             snapshot_.bulk_total = 1;
         }
-        ResetStages(title);
+        ResetStages(title, options.use_cover_as_background);
         ScreenWakeManager::Instance().RequestUpdate();
         RunGameSync(detail, platform_slug, title, options);
         Finish();
@@ -768,7 +773,7 @@ namespace romm::model {
                 snapshot_.bulk_index = (int)i;
                 snapshot_.rom_id = games[i].rom_id;
             }
-            ResetStages(games[i].title);
+            ResetStages(games[i].title, options.use_cover_as_background);
             ScreenWakeManager::Instance().RequestUpdate();
             std::cout << "[SYNC] Platform sync game " << (i + 1) << "/" << games.size()
                       << " rom_id=" << games[i].rom_id << " title=" << games[i].title << std::endl;
@@ -1002,24 +1007,34 @@ namespace romm::model {
             }
         }
 
-        // Optional: reuse this cover as the platform background (one image
-        // per platform — the last synced game's cover wins).
-        //
-        // Deliberately OUTSIDE the cover stage's branches: it must run even
-        // when the cover was already on disk (skipped) or the server has no
-        // cover art for this game but an older cover file remains on disk.
-        // In a batch the last game decides what the platform shows, so gating
-        // this on any per-game condition silently lost backgrounds for whole
-        // platforms.
-        if (options.use_cover_as_background && !cancel_requested_.load()) {
-            struct stat bg_check;
-            if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
-                const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
-                if (CopyFile(cover_target, bg_path)) {
-                    std::cout << "[SYNC] Platform background updated: " << bg_path << std::endl;
+        // --- Stage 4: Background (optional) --------------------------------
+        // Reuse this cover as the platform background (one image per platform
+        // — the last synced game's cover wins). Runs for every game when the
+        // option is on: even when the cover was already on disk (skipped) or
+        // the server has no cover art for this game but an older cover file
+        // remains on disk. In a batch the last game decides what the platform
+        // shows, so gating this on any per-game condition silently lost
+        // backgrounds for whole platforms.
+        if (options.use_cover_as_background) {
+            if (cancel_requested_.load()) {
+                SetStage(SyncStage::Background, SyncStageState::Skipped,
+                         romm::i18n::tr("sync.cancelled"));
+            } else {
+                struct stat bg_check;
+                if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
+                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug);
+                    SetStage(SyncStage::Background, SyncStageState::Running,
+                             romm::i18n::tr("sync.background.copying"));
+                    if (CopyFile(cover_target, bg_path)) {
+                        SetStage(SyncStage::Background, SyncStageState::Ok,
+                                 romm::i18n::format("sync.background.ok", {{"path", bg_path}}));
+                    } else {
+                        SetStage(SyncStage::Background, SyncStageState::Failed,
+                                 romm::i18n::format("sync.background.failed", {{"path", bg_path}}));
+                    }
                 } else {
-                    std::cerr << "[SYNC] Could not copy cover to background: "
-                              << bg_path << std::endl;
+                    SetStage(SyncStage::Background, SyncStageState::Skipped,
+                             romm::i18n::tr("sync.background.no_cover"));
                 }
             }
         }
