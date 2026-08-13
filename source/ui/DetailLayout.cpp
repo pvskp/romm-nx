@@ -381,9 +381,6 @@ namespace romm::ui {
         tex_btn_sync = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.sync"), text_color);
 
         details_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.details"), text_color);
-        save_data_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.save_data"), text_color);
-        mods_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.mods"), text_color);
-        cheats_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.cheats"), text_color);
 
         cover_placeholder_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.no_image"), text_color);
         loading_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.loading"), text_color);
@@ -413,9 +410,6 @@ namespace romm::ui {
         if (dynamic_download_tex) { pu::ui::render::DeleteTexture(dynamic_download_tex); dynamic_download_tex = nullptr; }
 
         if (details_tex) { pu::ui::render::DeleteTexture(details_tex); details_tex = nullptr; }
-        if (save_data_tex) { pu::ui::render::DeleteTexture(save_data_tex); save_data_tex = nullptr; }
-        if (mods_tex) { pu::ui::render::DeleteTexture(mods_tex); mods_tex = nullptr; }
-        if (cheats_tex) { pu::ui::render::DeleteTexture(cheats_tex); cheats_tex = nullptr; }
         if (cover_placeholder_tex) { pu::ui::render::DeleteTexture(cover_placeholder_tex); cover_placeholder_tex = nullptr; }
         if (loading_tex) { pu::ui::render::DeleteTexture(loading_tex); loading_tex = nullptr; }
         if (title_tex) { pu::ui::render::DeleteTexture(title_tex); title_tex = nullptr; }
@@ -761,14 +755,7 @@ namespace romm::ui {
                 drawer->RenderRoundedRectangleFill(t_bg, tx, tab_y, tab_w, tab_h, 8);
             }
 
-            pu::sdl2::Texture tab_tex;
-            switch(i) {
-                case 0: tab_tex = details_tex; break;
-                case 1: tab_tex = save_data_tex; break;
-                case 2: tab_tex = mods_tex; break;
-                case 3: tab_tex = cheats_tex; break;
-                default: tab_tex = nullptr; break;
-            }
+            pu::sdl2::Texture tab_tex = details_tex;
 
             if (tab_tex) {
                 s32 tw = pu::ui::render::GetTextureWidth(tab_tex);
@@ -987,7 +974,6 @@ namespace romm::ui {
         game_title_text->SetText("");
         platform_text->SetText("");
 
-        size_t tab_idx = nav->GetSelectedDetailTabIdx();
         int rom_id = ctx.rom_id;
         romm::model::DetailLoadState state = model->GetDetailState(rom_id);
         const auto* detail = model->GetCachedDetail(rom_id);
@@ -996,7 +982,7 @@ namespace romm::ui {
             card->ResolveDetailImageState(true);
         }
 
-        if (tab_idx == 0) { // DETAILS
+        { // DETAILS (the only remaining tab)
             if (state == romm::model::DetailLoadState::Loading || state == romm::model::DetailLoadState::NotLoaded) {
                 meta_text->SetText(romm::i18n::tr("detail.loading_details"));
                 desc_title_text->SetText(romm::i18n::tr("detail.section.description"));
@@ -1073,27 +1059,6 @@ namespace romm::ui {
                 UpdateFooterHints();
             }
             trailer_title_text->SetText("");
-        }
-        else if (tab_idx == 1) { // SAVE DATA
-            meta_text->SetText("");
-            desc_title_text->SetText(romm::i18n::tr("detail.section.save_data"));
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
-        }
-        else if (tab_idx == 2) { // MODS
-            meta_text->SetText("");
-            desc_title_text->SetText("");
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
-        }
-        else if (tab_idx == 3) { // CHEATS
-            meta_text->SetText("");
-            desc_title_text->SetText("");
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
         }
         UpdateDownloadStatus();
     }

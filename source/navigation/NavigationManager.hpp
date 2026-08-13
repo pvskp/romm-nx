@@ -105,7 +105,7 @@ namespace romm::navigation {
 
 
         DetailFocus detail_focus;
-        size_t selected_detail_tab_idx;    // Active detail tab (0 = DETAILS, 1 = SAVE DATA, 2 = MODS, 3 = CHEATS)
+        size_t selected_detail_tab_idx;    // Active detail tab (0 = DETAILS, the only one left)
         size_t selected_detail_action_idx; // Active detail action (0 = Download)
 
         // D-pad hold-repeat state
