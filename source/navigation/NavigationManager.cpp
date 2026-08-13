@@ -772,19 +772,32 @@ namespace romm::navigation {
                     state_changed = true;
                 }
             }
-            // ZR queues every selected game. Chosen over A-with-modifier because
-            // it can't be hit by accident while browsing.
+            // ZR syncs every selected game (ROM + saves + cover to the Tico folders),
+            // as a batch — the classic queue only moved ROMs and left covers
+            // and saves behind. Chosen over A-with-modifier because it can't be
+            // hit by accident while browsing.
             else if (keys_down & HidNpadButton_ZR) {
                 if (GetBulkSelectionCount() > 0) {
-                    auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                    const std::string slug = romm::model::NormalizePlatformSlug(current_platform.slug);
+                    std::vector<romm::model::SyncGameEntry> marked;
                     for (const auto& game : current_platform.games) {
                         if (IsBulkSelected(game.id)) {
-                            main_app->EnqueueBulkDownload(game.id, slug, game.title);
+                            romm::model::SyncGameEntry e;
+                            e.rom_id = game.id;
+                            e.title = game.title;
+                            marked.push_back(e);
                         }
                     }
-                    std::cout << "[NAV] [ZR] Bulk download queued for "
-                              << GetBulkSelectionCount() << " games" << std::endl;
+                    // Batch sync never prompts per-game: conflicts are skipped
+                    // and can be resolved later with the per-game Sync.
+                    romm::model::SyncManager::Instance().StartPlatformSync(
+                        current_platform.slug, current_platform.name, marked,
+                        romm::model::SyncOptions());
+                    sync_modal_active = true;
+                    sync_modal_mode = romm::navigation::SyncModalMode::Progress;
+                    sync_conflict_selected_idx = 0;
+                    sync_bulk_pending = false;
+                    std::cout << "[NAV] [ZR] Syncing " << marked.size()
+                              << " marked games of " << current_platform.name << std::endl;
                     ClearBulkSelection();
                     state_changed = true;
                 }
