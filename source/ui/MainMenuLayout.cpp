@@ -14,10 +14,11 @@ namespace romm::ui {
     // Card order is load-bearing (NavigationManager indexes menu entries by
     // position), so the keys live in one ordered table rather than being spread
     // across the constructor and the update-badge check below. The Installed /
-    // Queue / Saves / File browser entries were dropped: the Games screen
-    // manages every ROM (installed or not), and Settings stays for config.
+    // Queue / File browser entries were dropped: the Games screen manages every
+    // ROM (installed or not), and Settings stays for config.
     const char* const MenuGrid::kItemKeys[] = {
         "menu.games",
+        "menu.save_data",
         "menu.settings"
     };
 

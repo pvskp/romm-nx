@@ -36,6 +36,14 @@ namespace romm::model {
             SyncOptions options;
         };
 
+        // One specific server save version to pull (Save Data screen).
+        struct SpecificSaveJob {
+            int rom_id = 0;
+            std::string platform_slug;
+            std::string title;
+            SaveEntry save;
+        };
+
         std::string StripExtension(const std::string& filename) {
             size_t dot = filename.find_last_of('.');
             return (dot != std::string::npos) ? filename.substr(0, dot) : filename;
@@ -96,6 +104,13 @@ namespace romm::model {
         std::unique_ptr<PlatformSyncJob> job(static_cast<PlatformSyncJob*>(arg));
         SyncManager::Instance().PlatformWorker(job->platform_slug, job->platform_name,
                                                job->games, job->options);
+        return nullptr;
+    }
+
+    void* SyncManager::SpecificSaveTrampoline(void* arg) {
+        std::unique_ptr<SpecificSaveJob> job(static_cast<SpecificSaveJob*>(arg));
+        SyncManager::Instance().SpecificSaveWorker(job->rom_id, job->platform_slug,
+                                                   job->title, job->save);
         return nullptr;
     }
 
@@ -351,6 +366,107 @@ namespace romm::model {
         thread_started_ = true;
         std::cout << "[SYNC] Started platform sync slug=" << platform_slug
                   << " games=" << games.size() << std::endl;
+    }
+
+    void SyncManager::StartSpecificSaveDownload(int rom_id, const std::string& platform_slug,
+                                                const std::string& title, const SaveEntry& save) {
+        if (worker_running_.load()) {
+            std::cout << "[SYNC] Already running, ignoring specific save download for rom_id="
+                      << rom_id << std::endl;
+            return;
+        }
+
+        LoadSyncState();
+        cancel_requested_ = false;
+        conflict_pending_ = false;
+        conflict_skipped_ = false;
+
+        if (thread_started_) {
+            pthread_join(worker_thread_, nullptr);
+            thread_started_ = false;
+        }
+
+        SpecificSaveJob* job = new SpecificSaveJob();
+        job->rom_id = rom_id;
+        job->platform_slug = platform_slug;
+        job->title = title;
+        job->save = save;
+
+        worker_running_ = true;
+
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 0x100000);
+        const int rc = pthread_create(&worker_thread_, &attr, &SpecificSaveTrampoline, job);
+        pthread_attr_destroy(&attr);
+        if (rc != 0) {
+            delete job;
+            worker_running_ = false;
+            std::cerr << "[SYNC] Failed to spawn specific-save worker thread" << std::endl;
+            return;
+        }
+        thread_started_ = true;
+        std::cout << "[SYNC] Started specific save download rom_id=" << rom_id
+                  << " save_id=" << save.id << std::endl;
+    }
+
+    void SyncManager::SpecificSaveWorker(int rom_id, const std::string& platform_slug,
+                                         const std::string& title, const SaveEntry& save) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_ = SyncSnapshot();
+            snapshot_.running = true;
+            snapshot_.rom_id = rom_id;
+            snapshot_.platform_slug = platform_slug;
+            snapshot_.bulk_mode = false;
+            snapshot_.bulk_index = 0;
+            snapshot_.bulk_total = 1;
+        }
+        SyncOptions opts;
+        opts.saves_only = true;
+        ResetStages(title, opts);
+        ScreenWakeManager::Instance().RequestUpdate();
+
+        // Resolve the save target from the sync-state record (the ROM name
+        // the game was synced under).
+        std::string tico_slug;
+        std::string rom_path;
+        long long rom_size = 0;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
+                tico_slug = it->second.platform;
+                rom_path = it->second.rom_path;
+                rom_size = it->second.rom_size;
+            }
+        }
+        std::string rom_name;
+        {
+            size_t slash = rom_path.find_last_of('/');
+            if (slash != std::string::npos) rom_name = rom_path.substr(slash + 1);
+        }
+        const std::string rom_base = StripExtension(rom_name);
+        auto& config = ConfigManager::Instance();
+        std::string save_target;
+        if (!rom_base.empty()) {
+            save_target = config.GetTicoSavePath(platform_slug) + rom_base +
+                          ResolveTicoSaveExtension(tico_slug);
+        }
+
+        if (cancel_requested_.load()) {
+            Finish();
+            return;
+        }
+        if (save_target.empty()) {
+            SetStage(SyncStage::Saves, SyncStageState::Failed,
+                     romm::i18n::tr("sync.rom.no_files"));
+            Finish();
+            return;
+        }
+
+        RunSaveDownload(save, save_target, rom_id, tico_slug, rom_path, rom_size);
+        Finish();
     }
 
     bool SyncManager::IsRunning() const {
@@ -795,6 +911,15 @@ namespace romm::model {
             const std::string game_slug = games[i].platform_slug.empty()
                                               ? platform_slug
                                               : games[i].platform_slug;
+
+            // Saves-only runs don't need the ROM detail: the save target is
+            // resolved from the sync-state record inside RunGameSync.
+            if (options.saves_only) {
+                GameDetail minimal;
+                minimal.rom_id = games[i].rom_id;
+                RunGameSync(minimal, game_slug, games[i].title, options);
+                continue;
+            }
 
             auto res = RommApi::fetchRomDetailAsync(games[i].rom_id, 0, game_slug);
             if (!res) {

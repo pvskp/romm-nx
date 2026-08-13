@@ -15,6 +15,7 @@ namespace romm::ui {
     class DetailLayout;
     class SettingsLayout;
     class FullscreenImageLayout;
+    class SaveDataLayout;
 }
 
 namespace romm::navigation {
@@ -31,7 +32,8 @@ namespace romm::navigation {
         Library,
         Detail,
         Settings,
-        FullscreenImage
+        FullscreenImage,
+        SaveData
     };
 
     enum class LibraryFocus {
@@ -46,6 +48,13 @@ namespace romm::navigation {
     enum class DetailFocus {
         Actions,
         Cover
+    };
+
+    // Where the cursor sits inside the Save Data per-game view.
+    enum class SaveDetailFocus {
+        Local,    // the local-save card (information only)
+        Server,   // the server save history list
+        Actions   // SYNC / UPLOAD / DOWNLOAD
     };
 
     enum class CoverSize {
@@ -140,12 +149,27 @@ namespace romm::navigation {
         std::string sync_bulk_platform_name;
         std::vector<romm::model::SyncGameEntry> sync_bulk_games;
 
+        // --- Save Data screen state -------------------------------------
+        size_t save_platform_idx = 0;    // platform under the cursor
+        size_t save_game_idx = 0;        // game under the cursor
+        bool save_detail_open = false;   // per-game comparison view open
+        size_t save_list_focus = 0;      // 0 = game list, 1 = batch action bar
+        size_t save_action_idx = 0;      // 0 = Sync all, 1 = Upload all, 2 = Download all
+        int save_detail_rom_id = 0;      // the game open in the comparison view
+        SaveDetailFocus save_detail_focus = SaveDetailFocus::Local;
+        size_t save_detail_server_sel = 0; // selected row in the server history
+        size_t save_detail_action_idx = 0; // 0 = Sync, 1 = Upload, 2 = Download
+        // Set after a transfer runs from the Save Data screen so the input
+        // handler re-scans the local side once the worker finishes.
+        bool save_rescan_pending = false;
+
         // Persistent layouts created once
         std::shared_ptr<romm::ui::MainMenuLayout> main_menu_layout;
         std::shared_ptr<romm::ui::LibraryLayout> library_layout;
         std::shared_ptr<romm::ui::DetailLayout> detail_layout;
         std::shared_ptr<romm::ui::SettingsLayout> settings_layout;
         std::shared_ptr<romm::ui::FullscreenImageLayout> fullscreen_image_layout;
+        std::shared_ptr<romm::ui::SaveDataLayout> save_data_layout;
 
         void UpdateLayoutSelection();
 
@@ -270,6 +294,22 @@ namespace romm::navigation {
         // user is on the Main Menu, once per session, unless already
         // dismissed for that exact version.
         void PollUpdateNotification();
+
+        // --- Save Data screen ------------------------------------------
+        // Opens the screen (main menu card) and kicks the first refresh.
+        void OpenSaveData();
+        void HandleSaveDataInput(u64 keys_down, u64 keys_effective);
+
+        size_t GetSavePlatformIdx() const { return save_platform_idx; }
+        size_t GetSaveGameIdx() const { return save_game_idx; }
+        bool IsSaveDetailOpen() const { return save_detail_open; }
+        size_t GetSaveListFocus() const { return save_list_focus; }
+        size_t GetSaveActionIdx() const { return save_action_idx; }
+        int GetSaveDetailRomId() const { return save_detail_rom_id; }
+        SaveDetailFocus GetSaveDetailFocus() const { return save_detail_focus; }
+        size_t GetSaveDetailServerSel() const { return save_detail_server_sel; }
+        size_t GetSaveDetailActionIdx() const { return save_detail_action_idx; }
+        bool GetSaveRescanPending() const { return save_rescan_pending; }
 
     private:
         UninstallModalPayload uninstall_modal;

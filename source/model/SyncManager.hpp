@@ -123,6 +123,12 @@ namespace romm::model {
                                const std::vector<SyncGameEntry>& games,
                                const SyncOptions& options = SyncOptions());
 
+        // Downloads one specific server save version straight to the game's
+        // save target (Save Data screen). Runs on the sync worker so the
+        // progress modal shows it; stages show a single SAVES row.
+        void StartSpecificSaveDownload(int rom_id, const std::string& platform_slug,
+                                       const std::string& title, const SaveEntry& save);
+
         SyncSnapshot GetSnapshot() const;
         bool IsRunning() const;
 
@@ -192,6 +198,9 @@ namespace romm::model {
 
         static void* SyncTrampoline(void* arg);
         static void* PlatformSyncTrampoline(void* arg);
+        static void* SpecificSaveTrampoline(void* arg);
+        void SpecificSaveWorker(int rom_id, const std::string& platform_slug,
+                                const std::string& title, const SaveEntry& save);
 
         mutable std::mutex mutex_;      // guards snapshot_
         SyncSnapshot snapshot_;

@@ -39,6 +39,10 @@ namespace romm::model {
         long long local_size = 0;
         std::string local_hash;     // FNV-1a short hash (same as the sync)
         std::string local_modified; // "YYYY-MM-DD HH:MM" from mtime
+        // The last time this game's save was synced (server updated_at of the
+        // recorded save, from sync_state.json). Empty when never synced.
+        std::string last_sync_date;
+        bool synced_before = false;
 
         // Server side (only known after a refresh).
         bool server_checked = false;

@@ -94,12 +94,18 @@ namespace romm::model {
             g.local_size = 0;
             g.local_hash.clear();
             g.local_modified.clear();
+            g.last_sync_date.clear();
+            g.synced_before = false;
 
             const SyncStateEntry* entry = nullptr;
             auto it = state.find(g.rom_id);
             if (it != state.end()) entry = &it->second;
 
             if (entry) {
+                g.last_sync_date = entry->server_save_updated_at;
+                g.synced_before = entry->server_save_id != 0 &&
+                                  !entry->server_save_updated_at.empty();
+
                 // The save target derives from the ROM name the sync recorded.
                 std::string rp = entry->rom_path;
                 size_t slash = rp.find_last_of('/');
