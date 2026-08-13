@@ -38,22 +38,20 @@ namespace romm::ui {
         uint64_t generation = model->GetPlatformsGeneration();
         uint64_t i18n_generation = romm::i18n::Generation();
 
-        // The loaded platform's row turns cream while any of its games are
-        // marked — a texture change, so it has to be part of the rebuild
-        // detection like any other input that re-renders the rows.
-        const size_t marked_row = (rows_are_platforms && nav->GetBulkSelectionCount() > 0)
-                                      ? nav->GetLoadedPlatformIdx()
-                                      : (size_t)-1;
+        // The rows of every platform with marked games turn cream — a texture
+        // change, so it has to be part of the rebuild detection like any other
+        // input that re-renders the rows.
+        const int bulk_mark_count = (int)nav->GetBulkSelectionCount();
 
         if (state != cached_state || count != cached_platform_count ||
             generation != cached_platforms_generation ||
             i18n_generation != cached_i18n_generation ||
-            marked_row != cached_marked_row) {
+            bulk_mark_count != cached_bulk_mark_count) {
             cached_state = state;
             cached_platform_count = count;
             cached_platforms_generation = generation;
             cached_i18n_generation = i18n_generation;
-            cached_marked_row = marked_row;
+            cached_bulk_mark_count = bulk_mark_count;
             InitTextures();
         }
     }
@@ -111,19 +109,26 @@ namespace romm::ui {
                 }
                 rows_are_platforms = true;
 
-                // Bulk-selection state: while any game of the loaded platform
-                // is marked, its row turns cream — the same accent as the mark
-                // dots on the grid tiles, so the sidebar and the grid agree
-                // about what is selected.
+                // Bulk-selection state: any platform with marked games gets
+                // its row in cream — the same accent as the mark dots on the
+                // grid tiles — so the sidebar and the grid agree about what
+                // is selected, wherever the cursor currently is.
                 auto nav = nav_mgr.lock();
                 if (nav && nav->GetBulkSelectionCount() > 0) {
-                    const size_t idx = nav->GetLoadedPlatformIdx();
-                    if (idx < plats.size() && idx < selected_texs.size()) {
-                        const pu::ui::Color mark_clr(230, 199, 167, 255); // Cream (#E6C7A7)
-                        if (selected_texs[idx]) { pu::ui::render::DeleteTexture(selected_texs[idx]); }
-                        selected_texs[idx] = pu::ui::render::RenderText(font_name, plats[idx].name, mark_clr, w - 50);
-                        if (unselected_texs[idx]) { pu::ui::render::DeleteTexture(unselected_texs[idx]); }
-                        unselected_texs[idx] = pu::ui::render::RenderText(font_name, plats[idx].name, mark_clr, w - 50);
+                    const pu::ui::Color mark_clr(230, 199, 167, 255); // Cream (#E6C7A7)
+                    for (size_t i = 0; i < plats.size() && i < selected_texs.size(); ++i) {
+                        bool has_marks = false;
+                        for (const auto& game : plats[i].games) {
+                            if (nav->IsBulkSelected(game.id)) {
+                                has_marks = true;
+                                break;
+                            }
+                        }
+                        if (!has_marks) continue;
+                        if (selected_texs[i]) { pu::ui::render::DeleteTexture(selected_texs[i]); }
+                        selected_texs[i] = pu::ui::render::RenderText(font_name, plats[i].name, mark_clr, w - 50);
+                        if (unselected_texs[i]) { pu::ui::render::DeleteTexture(unselected_texs[i]); }
+                        unselected_texs[i] = pu::ui::render::RenderText(font_name, plats[i].name, mark_clr, w - 50);
                     }
                 }
             }

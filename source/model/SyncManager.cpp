@@ -776,7 +776,14 @@ namespace romm::model {
             std::cout << "[SYNC] Platform sync game " << (i + 1) << "/" << games.size()
                       << " rom_id=" << games[i].rom_id << " title=" << games[i].title << std::endl;
 
-            auto res = RommApi::fetchRomDetailAsync(games[i].rom_id, 0, platform_slug);
+            // A batch can span several platforms (marked games collected from
+            // different collections); each game resolves its folders from the
+            // platform it belongs to, falling back to the batch platform.
+            const std::string game_slug = games[i].platform_slug.empty()
+                                              ? platform_slug
+                                              : games[i].platform_slug;
+
+            auto res = RommApi::fetchRomDetailAsync(games[i].rom_id, 0, game_slug);
             if (!res) {
                 SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
                 SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
@@ -793,7 +800,7 @@ namespace romm::model {
                 SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
                 continue;
             }
-            RunGameSync(res->detail, platform_slug, games[i].title, options, true);
+            RunGameSync(res->detail, game_slug, games[i].title, options, true);
         }
         Finish();
     }

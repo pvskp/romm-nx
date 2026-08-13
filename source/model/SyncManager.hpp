@@ -63,10 +63,14 @@ namespace romm::model {
         std::string platform_name; // display name of the platform being synced
     };
 
-    // One game to process inside a platform-wide sync.
+    // One game to process inside a platform-wide sync. Carries its own
+    // platform slug: a batch can span several platforms (marked games from
+    // different collections), and each game must resolve its Tico folders
+    // from the platform it actually belongs to.
     struct SyncGameEntry {
         int rom_id = 0;
         std::string title;
+        std::string platform_slug;
     };
 
     // User-chosen overrides applied on this run. When any "force" flag is set

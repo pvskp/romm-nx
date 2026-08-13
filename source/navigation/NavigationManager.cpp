@@ -366,7 +366,9 @@ namespace romm::navigation {
             selected_game_idx = 0;
             selected_letter_idx = 0;
             ClearSearch();
-            ClearBulkSelection();
+            // Bulk marks deliberately survive hovering across platforms: a
+            // selection made on one platform stays visible (and downloadable
+            // with ZR) no matter where the cursor moves.
         }
 
         if (plat.games.empty()) {
@@ -743,22 +745,27 @@ namespace romm::navigation {
             // ZR opens the sync pre-flight for every selected game (ROM + saves +
             // cover to the Tico folders), so batch options like "cover as
             // platform background" can be toggled before anything runs.
+            // Marks survive moving across platforms, so the batch is collected
+            // from every platform, each game carrying its own platform slug.
             // Chosen over A-with-modifier because it can't be hit by accident
             // while browsing.
             else if (keys_down & HidNpadButton_ZR) {
                 if (GetBulkSelectionCount() > 0) {
                     std::vector<romm::model::SyncGameEntry> marked;
-                    for (const auto& game : current_platform.games) {
-                        if (IsBulkSelected(game.id)) {
-                            romm::model::SyncGameEntry e;
-                            e.rom_id = game.id;
-                            e.title = game.title;
-                            marked.push_back(e);
+                    for (const auto& plat : model->GetPlatforms()) {
+                        for (const auto& game : plat.games) {
+                            if (IsBulkSelected(game.id)) {
+                                romm::model::SyncGameEntry e;
+                                e.rom_id = game.id;
+                                e.title = game.title;
+                                e.platform_slug = plat.slug;
+                                marked.push_back(e);
+                            }
                         }
                     }
                     OpenBulkSyncOptions(current_platform.slug, current_platform.name, marked);
                     std::cout << "[NAV] [ZR] Sync options opened for " << marked.size()
-                              << " marked games of " << current_platform.name << std::endl;
+                              << " marked games (" << current_platform.name << ")" << std::endl;
                     state_changed = true;
                 }
             }
@@ -791,9 +798,9 @@ namespace romm::navigation {
                 // Sidebar Enter (A) -> load selected platform ROMs.
                 else if (keys_down & HidNpadButton_A) {
                     // Marks (and search/filter state) only reset when
-                    // actually switching platforms: re-pressing A on the
-                    // same platform keeps a bulk selection made from the
-                    // sidebar instead of silently clearing it.
+                    // actually switching platforms — except the bulk marks,
+                    // which deliberately survive platform switches so a
+                    // selection can be downloaded from anywhere.
                     const bool platform_changed = (loaded_platform_idx != selected_platform_idx);
                     loaded_platform_idx = selected_platform_idx;
                     if (platform_changed) {
@@ -801,10 +808,8 @@ namespace romm::navigation {
                         selected_letter_idx = 0;
                         // The query was scoped to the platform being left;
                         // carrying it over would silently hide most of the
-                        // new one. Same for the bulk selection — invisible
-                        // ids from another platform.
+                        // new one.
                         ClearSearch();
-                        ClearBulkSelection();
                     }
                     std::cout << "[PERF] Platform selected: " << platforms.at(selected_platform_idx).name << std::endl;
                     std::cout << "[LIBRARY] Platform changed to " << platforms.at(selected_platform_idx).name << "/" << platforms.at(selected_platform_idx).slug << std::endl;
