@@ -30,6 +30,15 @@ namespace romm::ui {
         std::map<int, RowCache> row_title_texs;
         std::map<int, RowCache> row_meta_texs;
         std::map<int, RowCache> chip_texs; // per SaveVerdict
+        // Platform strip and batch toolbar are re-rasterised every frame
+        // otherwise, which visibly slows the screen on the Switch's CPU.
+        std::map<size_t, RowCache> plat_texs;    // per platform index
+        std::map<size_t, RowCache> toolbar_texs; // per action index
+        // Level-2 (per-game view) texts, keyed by content: the whole view
+        // re-rasterises per frame otherwise. Cleared when the open game
+        // changes so a session doesn't accumulate stale textures.
+        std::map<std::string, RowCache> detail_texs;
+        int cached_detail_rom_id = -1;
         std::string cached_list_id;        // platform slug + game count
         s32 list_scroll = 0;               // display-only row offset
         s32 plat_scroll = 0;               // display-only platform offset

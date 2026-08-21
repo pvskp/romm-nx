@@ -42,6 +42,20 @@ namespace romm::ui {
             return std::string(buf);
         }
 
+        // RomM timestamps arrive as raw ISO-8601 strings
+        // ("2026-08-03T18:10:22.123456+00:00", "…Z", "…+02:00"). The strip and
+        // cards show them in the same shape as the console-clock line
+        // (SaveManager's "%Y-%m-%d %H:%M") so both read alike; anything that
+        // does not look like that shape is passed through verbatim.
+        std::string FormatIsoTimestamp(const std::string& iso) {
+            if (iso.size() >= 16 && iso[4] == '-' && iso[7] == '-' && iso[10] == 'T') {
+                std::string out = iso.substr(0, 16);
+                out[10] = ' ';
+                return out;
+            }
+            return iso;
+        }
+
         // The server list order is not guaranteed; newest first for display.
         std::vector<romm::model::SaveEntry> NewestFirst(std::vector<romm::model::SaveEntry> saves) {
             std::sort(saves.begin(), saves.end(), [](const romm::model::SaveEntry& a, const romm::model::SaveEntry& b) {
@@ -109,6 +123,19 @@ namespace romm::ui {
             if (entry.second.tex) pu::ui::render::DeleteTexture(entry.second.tex);
         }
         chip_texs.clear();
+        for (auto& entry : plat_texs) {
+            if (entry.second.tex) pu::ui::render::DeleteTexture(entry.second.tex);
+        }
+        plat_texs.clear();
+        for (auto& entry : toolbar_texs) {
+            if (entry.second.tex) pu::ui::render::DeleteTexture(entry.second.tex);
+        }
+        toolbar_texs.clear();
+        for (auto& entry : detail_texs) {
+            if (entry.second.tex) pu::ui::render::DeleteTexture(entry.second.tex);
+        }
+        detail_texs.clear();
+        cached_detail_rom_id = -1;
     }
 
     // --- Level 1: platform + game list ------------------------------------
@@ -136,14 +163,6 @@ namespace romm::ui {
         const auto& plat = platforms[plat_idx];
         const auto snap = romm::model::SaveManager::Instance().GetSnapshot();
         const size_t game_count = plat.games.size();
-
-        // Keep the SaveManager snapshot aligned with the model's game list:
-        // the ROM fetch may land after the screen opened, or a platform
-        // switch may have happened. Refreshing runs are never interrupted.
-        if (!romm::model::SaveManager::Instance().IsRefreshing() &&
-            snap.games.size() != game_count) {
-            romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
-        }
 
         pu::ui::Color text_color(237, 229, 251, 255);
         pu::ui::Color dim_color(190, 180, 225, 255);
@@ -220,14 +239,25 @@ namespace romm::ui {
             }
             drawer->RenderRoundedRectangleFill(border, bx, bar_y, btn_w, btn_h, 12);
             drawer->RenderRoundedRectangleFill(bg, bx + 4, bar_y + 4, btn_w - 8, btn_h - 8, 10);
-            pu::sdl2::Texture tex = pu::ui::render::RenderText(
-                "Orbitron@24", romm::i18n::tr(kActionKeys[i]),
-                (toolbar_focused && active) ? highlight : text_color);
-            if (tex) {
-                s32 tw = pu::ui::render::GetTextureWidth(tex);
-                s32 th = pu::ui::render::GetTextureHeight(tex);
-                drawer->RenderTexture(tex, bx + (btn_w - tw) / 2, bar_y + (btn_h - th) / 2);
-                pu::ui::render::DeleteTexture(tex);
+            // Cached per label + focus + selection, like the platform strip.
+            const std::string key = romm::i18n::tr(kActionKeys[i]) + "|" +
+                                    (toolbar_focused ? "1" : "0") + "|" + (active ? "1" : "0");
+            auto bit = toolbar_texs.find(i);
+            if (bit == toolbar_texs.end() || bit->second.key != key) {
+                if (bit != toolbar_texs.end() && bit->second.tex) {
+                    pu::ui::render::DeleteTexture(bit->second.tex);
+                }
+                toolbar_texs[i] = {
+                    key,
+                    pu::ui::render::RenderText(
+                        "Orbitron@24", romm::i18n::tr(kActionKeys[i]),
+                        (toolbar_focused && active) ? highlight : text_color)
+                };
+            }
+            if (toolbar_texs[i].tex) {
+                s32 tw = pu::ui::render::GetTextureWidth(toolbar_texs[i].tex);
+                s32 th = pu::ui::render::GetTextureHeight(toolbar_texs[i].tex);
+                drawer->RenderTexture(toolbar_texs[i].tex, bx + (btn_w - tw) / 2, bar_y + (btn_h - th) / 2);
             }
         }
 
@@ -256,13 +286,21 @@ namespace romm::ui {
                     plat_w - (plat_focused ? 8 : 0), plat_row_h - 6 - (plat_focused ? 8 : 0), 8);
             }
             // Long system names are truncated to the strip; unclipped they
-            // would bleed into the game list's text.
-            pu::sdl2::Texture tex = pu::ui::render::RenderText(
-                "Ubuntu@30", platforms[i].name,
-                sel ? highlight : dim_color, plat_w - 40);
-            if (tex) {
-                drawer->RenderTexture(tex, plat_x + 20, row_y + (plat_row_h - 6 - pu::ui::render::GetTextureHeight(tex)) / 2);
-                pu::ui::render::DeleteTexture(tex);
+            // would bleed into the game list's text. Cached per platform +
+            // selection + focus, so the strip costs nothing per frame.
+            const pu::ui::Color clr = sel ? highlight : dim_color;
+            const std::string key = platforms[i].name + "|" +
+                                    (sel ? "1" : "0") + "|" + (plat_focused ? "1" : "0");
+            auto pit = plat_texs.find(i);
+            if (pit == plat_texs.end() || pit->second.key != key) {
+                if (pit != plat_texs.end() && pit->second.tex) {
+                    pu::ui::render::DeleteTexture(pit->second.tex);
+                }
+                plat_texs[i] = { key, pu::ui::render::RenderText("Ubuntu@30", platforms[i].name, clr, plat_w - 40) };
+            }
+            if (plat_texs[i].tex) {
+                drawer->RenderTexture(plat_texs[i].tex, plat_x + 20,
+                                      row_y + (plat_row_h - 6 - pu::ui::render::GetTextureHeight(plat_texs[i].tex)) / 2);
             }
         }
 
@@ -369,7 +407,7 @@ namespace romm::ui {
                 }
                 if (newest) {
                     meta += "  ·  " + romm::i18n::format("save_data.meta.server",
-                                                         {{"date", newest->updated_at}});
+                                                         {{"date", FormatIsoTimestamp(newest->updated_at)}});
                 }
             }
             std::string meta_key = std::to_string(game.id) + "|" + meta;
@@ -432,6 +470,29 @@ namespace romm::ui {
             if (g.rom_id == nav->GetSaveDetailRomId()) { game = &g; break; }
         }
 
+        // Content-keyed text cache: every label on this view was re-rasterised
+        // per frame, which is what makes D-pad movement feel laggy. Textures
+        // are rebuilt only when their content or colour actually changes.
+        if (cached_detail_rom_id != nav->GetSaveDetailRomId()) {
+            cached_detail_rom_id = nav->GetSaveDetailRomId();
+            for (auto& e : detail_texs) {
+                if (e.second.tex) pu::ui::render::DeleteTexture(e.second.tex);
+            }
+            detail_texs.clear();
+        }
+        auto cached_text = [&](const std::string& key, const std::string& font,
+                               const std::string& text, pu::ui::Color color,
+                               s32 max_w = 0) -> pu::sdl2::Texture {
+            auto it = detail_texs.find(key);
+            if (it == detail_texs.end() || it->second.key != key) {
+                if (it != detail_texs.end() && it->second.tex) {
+                    pu::ui::render::DeleteTexture(it->second.tex);
+                }
+                detail_texs[key] = { key, pu::ui::render::RenderText(font, text, color, max_w) };
+            }
+            return detail_texs[key].tex;
+        };
+
         // Title of the open game (from the model; the snapshot may lag).
         std::string title;
         for (const auto& g : plat.games) {
@@ -445,60 +506,65 @@ namespace romm::ui {
         // --- Header ------------------------------------------------------------
         const std::string header = romm::i18n::format("save_data.detail.title",
                                                       {{"title", title}});
-        pu::sdl2::Texture tex_title = pu::ui::render::RenderText(
-            "Orbitron@37", header, text_color);
+        pu::sdl2::Texture tex_title = cached_text("title|" + header, "Orbitron@37", header, text_color);
         if (tex_title) {
             drawer->RenderTexture(tex_title, 60, 40);
-            pu::ui::render::DeleteTexture(tex_title);
         }
 
         const romm::model::SaveVerdict verdict = game ? game->verdict
                                                       : romm::model::SaveVerdict::Unknown;
         const std::string chip_label = romm::i18n::tr(VerdictKey(verdict));
-        pu::sdl2::Texture tex_chip = pu::ui::render::RenderText("Orbitron@24", chip_label,
-                                                                VerdictColor(verdict));
+        pu::sdl2::Texture tex_chip = cached_text("chip|" + chip_label, "Orbitron@24",
+                                                 chip_label, VerdictColor(verdict));
         if (tex_chip) {
-            const s32 chip_w = pu::ui::render::GetTextureWidth(tex_chip) + 26;
+            const s32 tw = pu::ui::render::GetTextureWidth(tex_chip);
+            const s32 chip_w = tw + 26;
             const s32 chip_h = 38;
-            drawer->RenderRoundedRectangleFill(VerdictColor(verdict), 1860 - chip_w, 42, chip_w, chip_h, 10);
+            // Right-aligned with the header; the label is centred inside the
+            // chip so it can never overflow the screen edge.
+            const s32 chip_x = 1860 - chip_w;
+            drawer->RenderRoundedRectangleFill(VerdictColor(verdict), chip_x, 42, chip_w, chip_h, 10);
             drawer->RenderRoundedRectangleFill(pu::ui::Color(16, 18, 22, 255),
-                                               1862, 44, chip_w - 4, chip_h - 4, 8);
-            drawer->RenderTexture(tex_chip, 1873, 49);
-            pu::ui::render::DeleteTexture(tex_chip);
+                                               chip_x + 2, 44, chip_w - 4, chip_h - 4, 8);
+            drawer->RenderTexture(tex_chip, chip_x + (chip_w - tw) / 2, 49);
         }
 
         // --- Time strip ----------------------------------------------------------
         // LOCAL marker -- LAST SYNC diamond -- SERVER dot, with the dates
         // underneath. The local date is the console clock (labelled as such);
         // the server dates are the RomM timestamps, which the verdict relies on.
+        // Every label is centred under its marker, so the short formatted
+        // dates can never collide the way the raw ISO strings did.
         constexpr s32 strip_y = 190;
         constexpr s32 strip_x1 = 560;
         constexpr s32 strip_x2 = 1360;
         constexpr s32 mid_x = (strip_x1 + strip_x2) / 2;
 
-        drawer->RenderRectangleFill(pu::ui::Color(45, 50, 62, 255), strip_x1, strip_y, strip_x2 - strip_x1, 3);
+        // The line starts flush with the LOCAL marker's left edge and ends at
+        // the SERVER dot, so the initial marker sits on the strip rather than
+        // floating at its end with an inconsistent gap.
+        drawer->RenderRectangleFill(pu::ui::Color(45, 50, 62, 255), strip_x1 - 6, strip_y, strip_x2 - (strip_x1 - 6), 3);
 
         const std::string local_date = (game && game->local_exists && !game->local_modified.empty())
                                            ? game->local_modified
                                            : romm::i18n::tr("save_data.strip.no_local");
         drawer->RenderRectangleFill(highlight, strip_x1 - 6, strip_y - 6, 12, 12);
-        pu::sdl2::Texture tex_l = pu::ui::render::RenderText("Ubuntu@20",
-            romm::i18n::format("save_data.strip.local", {{"date", local_date}}), dim_color);
+        const std::string local_label = romm::i18n::format("save_data.strip.local", {{"date", local_date}});
+        pu::sdl2::Texture tex_l = cached_text("strip.l|" + local_label, "Ubuntu@20", local_label, dim_color);
         if (tex_l) {
-            drawer->RenderTexture(tex_l, strip_x1 - 60, strip_y + 18);
-            pu::ui::render::DeleteTexture(tex_l);
+            s32 tw = pu::ui::render::GetTextureWidth(tex_l);
+            drawer->RenderTexture(tex_l, strip_x1 - tw / 2, strip_y + 18);
         }
 
         const std::string sync_date = (game && !game->last_sync_date.empty())
-                                          ? game->last_sync_date
+                                          ? FormatIsoTimestamp(game->last_sync_date)
                                           : romm::i18n::tr("save_data.strip.no_sync");
         FillDiamond(drawer, mid_x, strip_y, 8, dim_color);
-        pu::sdl2::Texture tex_m = pu::ui::render::RenderText("Ubuntu@20",
-            romm::i18n::format("save_data.strip.last_sync", {{"date", sync_date}}), dim_color);
+        const std::string sync_label = romm::i18n::format("save_data.strip.last_sync", {{"date", sync_date}});
+        pu::sdl2::Texture tex_m = cached_text("strip.m|" + sync_label, "Ubuntu@20", sync_label, dim_color);
         if (tex_m) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_m);
             drawer->RenderTexture(tex_m, mid_x - tw / 2, strip_y + 18);
-            pu::ui::render::DeleteTexture(tex_m);
         }
 
         const std::string server_date = [&]() -> std::string {
@@ -509,24 +575,27 @@ namespace romm::ui {
                 if (s.missing_from_fs) continue;
                 if (!newest || s.updated_at > newest->updated_at) newest = &s;
             }
-            return newest ? newest->updated_at : romm::i18n::tr("save_data.strip.no_server");
+            return newest ? FormatIsoTimestamp(newest->updated_at)
+                          : romm::i18n::tr("save_data.strip.no_server");
         }();
         drawer->RenderCircleFill(pu::ui::Color(190, 143, 230, 255), strip_x2, strip_y, 7);
-        pu::sdl2::Texture tex_r = pu::ui::render::RenderText("Ubuntu@20",
-            romm::i18n::format("save_data.strip.server", {{"date", server_date}}), dim_color);
+        const std::string server_label = romm::i18n::format("save_data.strip.server", {{"date", server_date}});
+        pu::sdl2::Texture tex_r = cached_text("strip.r|" + server_label, "Ubuntu@20", server_label, dim_color);
         if (tex_r) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_r);
-            drawer->RenderTexture(tex_r, strip_x2 - tw + 60, strip_y + 18);
-            pu::ui::render::DeleteTexture(tex_r);
+            drawer->RenderTexture(tex_r, strip_x2 - tw / 2, strip_y + 18);
         }
 
         // --- Cards ---------------------------------------------------------------
+        // Both cards are the same size and the middle gap is centred on the
+        // strip's LAST SYNC marker, so the cards sit under their timeline
+        // markers: LOCAL under the square (560), SERVER under the dot (1360).
         constexpr s32 card_y = 300;
-        constexpr s32 card_h = 500;
-        constexpr s32 local_w = 640;
-        constexpr s32 server_w = 640;
+        constexpr s32 card_h = 480;
+        constexpr s32 local_w = 840;
+        constexpr s32 server_w = 840;
         constexpr s32 local_x = 60;
-        constexpr s32 server_x = 1220;
+        constexpr s32 server_x = 1020;
         constexpr s32 focus_w = 4;
 
         // LOCAL card
@@ -538,61 +607,63 @@ namespace romm::ui {
                                                local_x + focus_w, card_y + focus_w,
                                                local_w - focus_w * 2, card_h - focus_w * 2, 14);
 
-            pu::sdl2::Texture tex_card = pu::ui::render::RenderText(
-                "Orbitron@30", romm::i18n::tr("save_data.detail.local_card"), text_color);
+            const std::string local_card_label = romm::i18n::tr("save_data.detail.local_card");
+            pu::sdl2::Texture tex_card = cached_text("lcard.h|" + local_card_label,
+                                                     "Orbitron@30", local_card_label, text_color);
             if (tex_card) {
                 drawer->RenderTexture(tex_card, local_x + 30, card_y + 24);
-                pu::ui::render::DeleteTexture(tex_card);
             }
 
             if (game && game->local_exists) {
                 std::string fname = game->local_path;
                 size_t slash = fname.find_last_of('/');
                 if (slash != std::string::npos) fname = fname.substr(slash + 1);
-                pu::sdl2::Texture tex_f = pu::ui::render::RenderText(
-                    "Ubuntu@26", fname, text_color, local_w - 60);
+                pu::sdl2::Texture tex_f = cached_text("lcard.f|" + fname, "Ubuntu@26",
+                                                      fname, text_color, local_w - 60);
                 if (tex_f) {
-                    drawer->RenderTexture(tex_f, local_x + 30, card_y + 90);
-                    pu::ui::render::DeleteTexture(tex_f);
+                    drawer->RenderTexture(tex_f, local_x + 30, card_y + 88);
                 }
                 const std::string size_line = romm::i18n::format("save_data.detail.size",
                                                                  {{"size", FormatBytes(game->local_size)}});
-                pu::sdl2::Texture tex_s = pu::ui::render::RenderText("Ubuntu@24", size_line, dim_color);
+                pu::sdl2::Texture tex_s = cached_text("lcard.s|" + size_line, "Ubuntu@24", size_line, dim_color);
                 if (tex_s) {
-                    drawer->RenderTexture(tex_s, local_x + 30, card_y + 150);
-                    pu::ui::render::DeleteTexture(tex_s);
+                    drawer->RenderTexture(tex_s, local_x + 30, card_y + 152);
                 }
                 const std::string hash_line = romm::i18n::format("save_data.detail.hash",
                                                                  {{"hash", game->local_hash}});
-                pu::sdl2::Texture tex_h = pu::ui::render::RenderText("Ubuntu@24", hash_line, dim_color);
+                pu::sdl2::Texture tex_h = cached_text("lcard.hh|" + hash_line, "Ubuntu@24", hash_line, dim_color);
                 if (tex_h) {
-                    drawer->RenderTexture(tex_h, local_x + 30, card_y + 190);
-                    pu::ui::render::DeleteTexture(tex_h);
+                    drawer->RenderTexture(tex_h, local_x + 30, card_y + 202);
                 }
                 const std::string mod_line = romm::i18n::format("save_data.detail.modified",
                                                                 {{"date", game->local_modified}}) +
                                              "  (" + romm::i18n::tr("save_data.detail.clock_note") + ")";
-                pu::sdl2::Texture tex_m2 = pu::ui::render::RenderText("Ubuntu@24", mod_line, dim_color);
+                pu::sdl2::Texture tex_m2 = cached_text("lcard.m|" + mod_line, "Ubuntu@24", mod_line, dim_color);
                 if (tex_m2) {
-                    drawer->RenderTexture(tex_m2, local_x + 30, card_y + 230);
-                    pu::ui::render::DeleteTexture(tex_m2);
+                    drawer->RenderTexture(tex_m2, local_x + 30, card_y + 252);
                 }
                 if (!game->last_sync_date.empty()) {
-                    pu::sdl2::Texture tex_ls = pu::ui::render::RenderText(
-                        "Ubuntu@22", romm::i18n::format("save_data.detail.last_sync_line",
-                                                        {{"date", game->last_sync_date}}),
-                        dim_color);
+                    const std::string ls_line = romm::i18n::format("save_data.detail.last_sync_line",
+                                                                   {{"date", FormatIsoTimestamp(game->last_sync_date)}});
+                    pu::sdl2::Texture tex_ls = cached_text("lcard.ls|" + ls_line, "Ubuntu@22", ls_line, dim_color);
                     if (tex_ls) {
-                        drawer->RenderTexture(tex_ls, local_x + 30, card_y + 290);
-                        pu::ui::render::DeleteTexture(tex_ls);
+                        drawer->RenderTexture(tex_ls, local_x + 30, card_y + 302);
                     }
                 }
+
+                // Full path as a footer line, so the card fills its height
+                // instead of leaving a dead band under the last field.
+                pu::sdl2::Texture tex_p = cached_text("lcard.p|" + game->local_path, "Ubuntu@18",
+                                                      game->local_path, dim_color, local_w - 60);
+                if (tex_p) {
+                    drawer->RenderTexture(tex_p, local_x + 30, card_y + 422);
+                }
             } else {
-                pu::sdl2::Texture tex_e = pu::ui::render::RenderText(
-                    "Ubuntu@26", romm::i18n::tr("save_data.detail.no_local"), dim_color);
+                const std::string no_local_label = romm::i18n::tr("save_data.detail.no_local");
+                pu::sdl2::Texture tex_e = cached_text("lcard.e|" + no_local_label,
+                                                      "Ubuntu@26", no_local_label, dim_color);
                 if (tex_e) {
                     drawer->RenderTexture(tex_e, local_x + 30, card_y + 100);
-                    pu::ui::render::DeleteTexture(tex_e);
                 }
             }
         }
@@ -606,39 +677,39 @@ namespace romm::ui {
                                                server_x + focus_w, card_y + focus_w,
                                                server_w - focus_w * 2, card_h - focus_w * 2, 14);
 
-            pu::sdl2::Texture tex_card = pu::ui::render::RenderText(
-                "Orbitron@30", romm::i18n::tr("save_data.detail.server_card"), text_color);
+            const std::string server_card_label = romm::i18n::tr("save_data.detail.server_card");
+            pu::sdl2::Texture tex_card = cached_text("scard.h|" + server_card_label,
+                                                     "Orbitron@30", server_card_label, text_color);
             if (tex_card) {
                 drawer->RenderTexture(tex_card, server_x + 30, card_y + 24);
-                pu::ui::render::DeleteTexture(tex_card);
             }
 
             if (!game) {
-                pu::sdl2::Texture tex_e = pu::ui::render::RenderText(
-                    "Ubuntu@26", romm::i18n::tr("save_data.detail.loading"), dim_color);
+                const std::string loading_label = romm::i18n::tr("save_data.detail.loading");
+                pu::sdl2::Texture tex_e = cached_text("scard.e|" + loading_label,
+                                                      "Ubuntu@26", loading_label, dim_color);
                 if (tex_e) {
                     drawer->RenderTexture(tex_e, server_x + 30, card_y + 100);
-                    pu::ui::render::DeleteTexture(tex_e);
                 }
             } else if (!game->server_checked) {
-                pu::sdl2::Texture tex_e = pu::ui::render::RenderText(
-                    "Ubuntu@26", romm::i18n::tr("save_data.detail.not_checked"), dim_color);
+                const std::string not_checked_label = romm::i18n::tr("save_data.detail.not_checked");
+                pu::sdl2::Texture tex_e = cached_text("scard.e|" + not_checked_label,
+                                                      "Ubuntu@26", not_checked_label, dim_color);
                 if (tex_e) {
                     drawer->RenderTexture(tex_e, server_x + 30, card_y + 100);
-                    pu::ui::render::DeleteTexture(tex_e);
                 }
             } else if (!game->server_has_saves) {
-                pu::sdl2::Texture tex_e = pu::ui::render::RenderText(
-                    "Ubuntu@26", romm::i18n::tr("save_data.detail.no_server"), dim_color);
+                const std::string no_server_label = romm::i18n::tr("save_data.detail.no_server");
+                pu::sdl2::Texture tex_e = cached_text("scard.e|" + no_server_label,
+                                                      "Ubuntu@26", no_server_label, dim_color);
                 if (tex_e) {
                     drawer->RenderTexture(tex_e, server_x + 30, card_y + 100);
-                    pu::ui::render::DeleteTexture(tex_e);
                 }
             } else {
                 const auto saves = NewestFirst(game->server_saves);
                 const size_t sel_row = std::min(nav->GetSaveDetailServerSel(), saves.size() - 1);
-                constexpr s32 row_h = 64;
-                constexpr s32 max_rows = 6;
+                constexpr s32 row_h = 72;
+                constexpr s32 max_rows = 5;
                 s32 scroll = 0;
                 if (sel_row >= max_rows) scroll = (s32)sel_row - max_rows + 1;
                 for (size_t i = 0; i < saves.size() && i < max_rows; ++i) {
@@ -653,19 +724,23 @@ namespace romm::ui {
                                     : pu::ui::Color(85, 63, 152, 130),
                             server_x + 14, ry, server_w - 28, row_h - 8, 8);
                     }
-                    pu::sdl2::Texture tex_n = pu::ui::render::RenderText(
-                        "Ubuntu@24", save.file_name,
+                    // Name on its own line, meta below with enough air between
+                    // the rows that the pair reads as one item.
+                    const std::string row_key = (selected ? "srow.n.sel|" : "srow.n|") + save.file_name;
+                    pu::sdl2::Texture tex_n = cached_text(
+                        row_key, "Ubuntu@24", save.file_name,
                         selected ? highlight : text_color, server_w - 60);
                     if (tex_n) {
-                        drawer->RenderTexture(tex_n, server_x + 30, ry + 6);
-                        pu::ui::render::DeleteTexture(tex_n);
+                        drawer->RenderTexture(tex_n, server_x + 30, ry + 4);
                     }
-                    const std::string meta = save.updated_at + "  ·  " + FormatBytes(save.file_size_bytes);
-                    pu::sdl2::Texture tex_m = pu::ui::render::RenderText(
-                        "Ubuntu@20", meta, dim_color, server_w - 60);
+                    const std::string meta = FormatIsoTimestamp(save.updated_at) +
+                                             "  ·  " + FormatBytes(save.file_size_bytes);
+                    const std::string meta_key = (selected ? "srow.m.sel|" : "srow.m|") + meta;
+                    pu::sdl2::Texture tex_m = cached_text(
+                        meta_key, "Ubuntu@20", meta,
+                        selected ? text_color : dim_color, server_w - 60);
                     if (tex_m) {
-                        drawer->RenderTexture(tex_m, server_x + 30, ry + 36);
-                        pu::ui::render::DeleteTexture(tex_m);
+                        drawer->RenderTexture(tex_m, server_x + 30, ry + 38);
                     }
                 }
             }
@@ -693,14 +768,15 @@ namespace romm::ui {
             }
             drawer->RenderRoundedRectangleFill(border, bx, act_y, act_w, act_h, 12);
             drawer->RenderRoundedRectangleFill(bg, bx + 4, act_y + 4, act_w - 8, act_h - 8, 10);
-            pu::sdl2::Texture tex = pu::ui::render::RenderText(
-                "Orbitron@24", romm::i18n::tr(kDetailActionKeys[i]),
-                (actions_focused && active) ? highlight : text_color);
+            const std::string act_label = romm::i18n::tr(kDetailActionKeys[i]);
+            const bool lit = (actions_focused && active);
+            pu::sdl2::Texture tex = cached_text(
+                std::string("act|") + (lit ? "lit|" : "") + act_label,
+                "Orbitron@24", act_label, lit ? highlight : text_color);
             if (tex) {
                 s32 tw = pu::ui::render::GetTextureWidth(tex);
                 s32 th = pu::ui::render::GetTextureHeight(tex);
                 drawer->RenderTexture(tex, bx + (act_w - tw) / 2, act_y + (act_h - th) / 2);
-                pu::ui::render::DeleteTexture(tex);
             }
         }
 
@@ -710,12 +786,11 @@ namespace romm::ui {
         } else if (nav->GetSaveDetailFocus() == romm::navigation::SaveDetailFocus::Actions) {
             hint_key = "save_data.hint.detail.actions";
         }
-        pu::sdl2::Texture tex_hint = pu::ui::render::RenderText("Ubuntu@22",
-            romm::i18n::tr(hint_key), dim_color);
+        const std::string hint_label = romm::i18n::tr(hint_key);
+        pu::sdl2::Texture tex_hint = cached_text("hint|" + hint_label, "Ubuntu@22", hint_label, dim_color);
         if (tex_hint) {
             s32 tw = pu::ui::render::GetTextureWidth(tex_hint);
             drawer->RenderTexture(tex_hint, (1920 - tw) / 2, 1000);
-            pu::ui::render::DeleteTexture(tex_hint);
         }
     }
 
@@ -723,6 +798,31 @@ namespace romm::ui {
                                 const s32 x_coord, const s32 y_coord) {
         auto nav = nav_mgr.lock();
         if (!nav) return;
+
+        // Keep the SaveManager snapshot aligned with the model's game list.
+        // A platform switch while a refresh was running only asked the worker
+        // to park (SaveManager::Refresh never blocks the UI thread); re-issue
+        // the refresh here once it reports idle, so the screen always shows
+        // the platform under the cursor — even one with as many games as the
+        // previous platform, which the size comparison alone would miss.
+        {
+            auto model = nav->GetModel();
+            if (model) {
+                const auto& platforms = model->GetPlatforms();
+                if (!platforms.empty()) {
+                    const size_t plat_idx = std::min(nav->GetSavePlatformIdx(), platforms.size() - 1);
+                    const auto& plat = platforms[plat_idx];
+                    auto& saves = romm::model::SaveManager::Instance();
+                    if (!saves.IsRefreshing()) {
+                        const auto snap = saves.GetSnapshot();
+                        if (snap.games.size() != plat.games.size() ||
+                            snap.platform_slug != plat.slug) {
+                            saves.Refresh(plat.games, plat.slug);
+                        }
+                    }
+                }
+            }
+        }
 
         // Clear the row caches when the list identity changes (platform switch
         // or game-count change), so no stale row textures survive a refresh.

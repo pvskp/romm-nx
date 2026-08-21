@@ -124,6 +124,30 @@ namespace romm::model {
                         g.local_modified = FormatModified(st.st_mtime);
                     }
                 }
+
+                // A transfer records the resulting server save in sync_state.
+                // If that recorded save is newer than anything the snapshot
+                // fetched, the snapshot predates the transfer — an upload
+                // creates a brand-new server save after the last fetch, so the
+                // stale list would make the verdict read ServerNewer until the
+                // next refresh. Synthesise the recorded save instead: it is a
+                // copy of the local file, so its name and size are known.
+                const SaveEntry* newest = NewestSave(g.server_saves);
+                if (g.local_exists &&
+                    entry->server_save_id != 0 && !entry->server_save_updated_at.empty() &&
+                    (!newest || entry->server_save_updated_at > newest->updated_at)) {
+                    SaveEntry synth;
+                    synth.id = entry->server_save_id;
+                    synth.rom_id = g.rom_id;
+                    synth.updated_at = entry->server_save_updated_at;
+                    synth.missing_from_fs = false;
+                    // Same name the upload pipeline sent to the server.
+                    synth.file_name = SyncManager::ServerSaveName(g.local_path);
+                    synth.file_size_bytes = g.local_size;
+                    g.server_saves.push_back(synth);
+                    g.server_checked = true;
+                    g.server_has_saves = true;
+                }
             }
 
             g.verdict = ComputeVerdict(g, entry);
@@ -132,15 +156,14 @@ namespace romm::model {
 
     void SaveManager::Refresh(const std::vector<Game>& games, const std::string& romm_slug) {
         if (refreshing_.load()) {
-            // Cancel the running refresh and wait for it to park: a platform
-            // switch re-targets the whole list, and racing two workers on one
-            // snapshot would corrupt it. The wait is bounded by a single
-            // in-flight fetch at most.
+            // A refresh is running. Parking on it via pthread_join would freeze
+            // the UI thread — input included — for the duration of the worker's
+            // in-flight fetch, and that fetch cannot be aborted mid-flight.
+            // Ask the worker to park on its own instead and return immediately:
+            // the Save Data view re-issues this call the moment the worker
+            // reports idle, so the re-target is only ever delayed by one fetch.
             cancel_requested_ = true;
-            if (thread_started_) {
-                pthread_join(worker_thread_, nullptr);
-                thread_started_ = false;
-            }
+            return;
         }
 
         {

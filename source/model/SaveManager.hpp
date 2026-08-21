@@ -72,7 +72,9 @@ namespace romm::model {
         static SaveManager& Instance();
 
         // Rebuilds the platform snapshot and starts the server refresh worker.
-        // No-op while a refresh is running (the screen's ZR refresh).
+        // While a refresh is running the call only asks the worker to park and
+        // returns: re-targeting must never block the UI thread on the fetch in
+        // flight, so the Save Data view re-issues the request once it parks.
         void Refresh(const std::vector<Game>& games, const std::string& romm_slug);
 
         // Re-reads sync_state.json and the disk, keeping whatever server data
