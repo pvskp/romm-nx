@@ -38,13 +38,20 @@ namespace romm::ui {
         uint64_t generation = model->GetPlatformsGeneration();
         uint64_t i18n_generation = romm::i18n::Generation();
 
+        // The rows of every platform with marked games turn cream — a texture
+        // change, so it has to be part of the rebuild detection like any other
+        // input that re-renders the rows.
+        const int bulk_mark_count = (int)nav->GetBulkSelectionCount();
+
         if (state != cached_state || count != cached_platform_count ||
             generation != cached_platforms_generation ||
-            i18n_generation != cached_i18n_generation) {
+            i18n_generation != cached_i18n_generation ||
+            bulk_mark_count != cached_bulk_mark_count) {
             cached_state = state;
             cached_platform_count = count;
             cached_platforms_generation = generation;
             cached_i18n_generation = i18n_generation;
+            cached_bulk_mark_count = bulk_mark_count;
             InitTextures();
         }
     }
@@ -101,6 +108,29 @@ namespace romm::ui {
                     push_row(plat.name, romm::model::ResolvePlatformIdentity(plat.slug, plat.name));
                 }
                 rows_are_platforms = true;
+
+                // Bulk-selection state: any platform with marked games gets
+                // its row in cream — the same accent as the mark dots on the
+                // grid tiles — so the sidebar and the grid agree about what
+                // is selected, wherever the cursor currently is.
+                auto nav = nav_mgr.lock();
+                if (nav && nav->GetBulkSelectionCount() > 0) {
+                    const pu::ui::Color mark_clr(230, 199, 167, 255); // Cream (#E6C7A7)
+                    for (size_t i = 0; i < plats.size() && i < selected_texs.size(); ++i) {
+                        bool has_marks = false;
+                        for (const auto& game : plats[i].games) {
+                            if (nav->IsBulkSelected(game.id)) {
+                                has_marks = true;
+                                break;
+                            }
+                        }
+                        if (!has_marks) continue;
+                        if (selected_texs[i]) { pu::ui::render::DeleteTexture(selected_texs[i]); }
+                        selected_texs[i] = pu::ui::render::RenderText(font_name, plats[i].name, mark_clr, w - 50);
+                        if (unselected_texs[i]) { pu::ui::render::DeleteTexture(unselected_texs[i]); }
+                        unselected_texs[i] = pu::ui::render::RenderText(font_name, plats[i].name, mark_clr, w - 50);
+                    }
+                }
             }
             return;
         }
@@ -183,10 +213,9 @@ namespace romm::ui {
             state == romm::model::ApiState::Success &&
             rows_are_platforms && EnsureBannerLayout().viable) {
             RenderBanners(drawer, x_coord, y_coord, selected_idx, sidebar_focused);
-            return;
+        } else {
+            RenderTextRows(drawer, x_coord, y_coord, selected_idx, sidebar_focused);
         }
-
-        RenderTextRows(drawer, x_coord, y_coord, selected_idx, sidebar_focused);
     }
 
     void SidebarList::RenderTextRows(pu::ui::render::Renderer::Ref &drawer, const s32 x_coord, const s32 y_coord,

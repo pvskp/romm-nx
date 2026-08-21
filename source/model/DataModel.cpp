@@ -1,6 +1,4 @@
 #include "DataModel.hpp"
-#include "ConfigManager.hpp"
-#include "PlatformCatalog.hpp"
 #include <iostream>
 
 namespace romm::model {
@@ -13,32 +11,29 @@ namespace romm::model {
     }
 
     void DataModel::SetPlatforms(const std::vector<Platform>& new_plats) {
-        this->all_platforms = new_plats;
+        this->all_platforms.clear();
+
+        // The sidebar lists platforms that actually carry ROMs on the server.
+        // A server that doesn't report rom_count keeps every platform
+        // ("unknown" is not "zero"), so an older RomM doesn't empty the list.
+        for (const auto& plat : new_plats) {
+            if (plat.has_rom_count && plat.rom_count <= 0) {
+                std::cout << "[PLATFORMS] Skipping empty platform: " << plat.name << std::endl;
+                continue;
+            }
+            this->all_platforms.push_back(plat);
+        }
+
         this->platforms.clear(); // fresh server list: nothing cached to carry over
 
-        // First sighting of a platform decides its default visibility. Persist
-        // straight away, so the default survives even if the app never reaches
-        // Settings — but only when something actually changed, to keep this off
-        // the hot path of every refetch.
-        std::vector<std::string> slugs;
-        slugs.reserve(new_plats.size());
-        for (const auto& plat : new_plats) {
-            slugs.push_back(ResolvePlatformIdentity(plat.slug, plat.name));
-        }
-        auto& config = ConfigManager::Instance();
-        if (config.RegisterDetectedPlatforms(slugs)) {
-            config.Save();
-        }
-
+        // The sidebar shows every platform the server reports — the per-user
+        // visibility selection was removed.
         RebuildVisiblePlatforms();
     }
 
     void DataModel::RebuildVisiblePlatforms() {
-        auto& config = ConfigManager::Instance();
-
         // Park whatever the visible list has already fetched back onto the
-        // master list first. Hiding a platform must not throw away its ROMs:
-        // re-enabling it has to come back without another request.
+        // master list first, so nothing is thrown away on a rebuild.
         for (auto& loaded : this->platforms) {
             for (auto& meta : this->all_platforms) {
                 if (meta.id == loaded.id) {
@@ -49,24 +44,10 @@ namespace romm::model {
             }
         }
 
-        std::vector<Platform> next;
-        next.reserve(this->all_platforms.size());
-        for (auto& meta : this->all_platforms) {
-            if (!config.IsPlatformVisible(ResolvePlatformIdentity(meta.slug, meta.name))) continue;
-            Platform visible;
-            visible.name = meta.name;
-            visible.id = meta.id;
-            visible.slug = meta.slug;
-            visible.games = std::move(meta.games); // ownership hops back on hide
-            visible.roms_state = meta.roms_state;
-            next.push_back(std::move(visible));
-        }
-
-        this->platforms = std::move(next);
+        this->platforms = this->all_platforms;
         this->platforms_generation++;
 
-        std::cout << "[PLATFORMS] Visible " << this->platforms.size() << "/"
-                  << this->all_platforms.size() << " platforms" << std::endl;
+        std::cout << "[PLATFORMS] " << this->platforms.size() << " platforms" << std::endl;
     }
 
     const Platform* DataModel::GetPlatformById(const std::string& id) const {
@@ -91,24 +72,30 @@ namespace romm::model {
     }
 
     void DataModel::UpdatePlatformGames(const std::string& platform_id, const std::vector<Game>& games) {
-        for (auto& plat : this->platforms) {
-            if (plat.id == platform_id) {
-                plat.games = games;
-                if (games.empty()) {
-                    plat.roms_state = ApiState::NoData;
-                } else {
-                    plat.roms_state = ApiState::Success;
+        // Both lists mirror each other now (no visibility split), so keep them
+        // in sync — lookups by FindGameByRomId walk either list.
+        for (auto* list : {&this->platforms, &this->all_platforms}) {
+            for (auto& plat : *list) {
+                if (plat.id == platform_id) {
+                    plat.games = games;
+                    if (games.empty()) {
+                        plat.roms_state = ApiState::NoData;
+                    } else {
+                        plat.roms_state = ApiState::Success;
+                    }
+                    break;
                 }
-                break;
             }
         }
     }
 
     void DataModel::SetPlatformRomsState(const std::string& platform_id, ApiState state) {
-        for (auto& plat : this->platforms) {
-            if (plat.id == platform_id) {
-                plat.roms_state = state;
-                break;
+        for (auto* list : {&this->platforms, &this->all_platforms}) {
+            for (auto& plat : *list) {
+                if (plat.id == platform_id) {
+                    plat.roms_state = state;
+                    break;
+                }
             }
         }
     }

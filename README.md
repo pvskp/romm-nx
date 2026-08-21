@@ -35,6 +35,10 @@ Some features are still experimental or incomplete.
 * Cheats and mods management
 * Game launcher
 
+## Build from source
+
+`make -j$(nproc)`
+
 ## Installation
 
 1. Download the latest `romm-nx.nro` release.

@@ -1,4 +1,5 @@
 #include "JsonUtil.hpp"
+#include "DataModel.hpp"
 #include <cctype>
 #include <iostream>
 
@@ -195,7 +196,60 @@ bool jsonParsePlatformList(const std::string& json, std::vector<PlatformEntry>& 
                 platform.name = "Platform #" + std::to_string(platform.id);
             }
             jsonExtractString(block, "slug", platform.slug);
+            platform.has_rom_count = jsonExtractLongLong(block, "rom_count", platform.rom_count);
             out.push_back(platform);
+        }
+
+        pos = objectEnd + 1;
+        pos = skipWhitespace(json, pos);
+        if (pos < end && json[pos] == ',') {
+            ++pos;
+        }
+    }
+
+    return true;
+}
+
+bool jsonParseSaveItems(const std::string& json, std::vector<SaveEntry>& out) {
+    out.clear();
+
+    size_t start = skipWhitespace(json, 0);
+    if (start >= json.size() || json[start] != '[') {
+        return false;
+    }
+
+    const size_t end = findMatching(json, start, '[', ']');
+    if (end == std::string::npos) {
+        return false;
+    }
+
+    size_t pos = start + 1;
+    while (pos < end) {
+        pos = skipWhitespace(json, pos);
+        if (pos >= end || json[pos] == ']') {
+            break;
+        }
+        if (json[pos] != '{') {
+            return false;
+        }
+
+        const size_t objectEnd = findMatching(json, pos, '{', '}');
+        if (objectEnd == std::string::npos || objectEnd > end) {
+            return false;
+        }
+
+        std::string block = json.substr(pos, objectEnd - pos + 1);
+        SaveEntry save;
+        if (jsonExtractInt(block, "id", save.id)) {
+            jsonExtractInt(block, "rom_id", save.rom_id);
+            jsonExtractString(block, "file_name", save.file_name);
+            jsonExtractLongLong(block, "file_size_bytes", save.file_size_bytes);
+            jsonExtractString(block, "emulator", save.emulator);
+            jsonExtractString(block, "slot", save.slot);
+            jsonExtractBool(block, "missing_from_fs", save.missing_from_fs);
+            jsonExtractString(block, "created_at", save.created_at);
+            jsonExtractString(block, "updated_at", save.updated_at);
+            out.push_back(save);
         }
 
         pos = objectEnd + 1;

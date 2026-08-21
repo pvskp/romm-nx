@@ -169,6 +169,98 @@ void performDownload(
     result->completed = true;
 }
 
+// POST multipart/form-data via curl_mime: one part per textual field plus a
+// single file part (name = file_field_name, filename = file_name_on_server).
+void performUpload(
+    std::string url,
+    std::map<std::string, std::string> headers,
+    std::map<std::string, std::string> fields,
+    std::string file_field_name,
+    std::string file_path,
+    std::string file_name_on_server,
+    std::shared_ptr<HttpResult> result) {
+
+    CURL* curl = acquireCurl();
+    if (!curl) {
+        result->success = false;
+        result->error = "curl init failed";
+        result->completed = true;
+        return;
+    }
+
+    curl_mime* mime = curl_mime_init(curl);
+    if (!mime) {
+        result->success = false;
+        result->error = "mime init failed";
+        result->completed = true;
+        return;
+    }
+
+    for (const auto& kv : fields) {
+        curl_mimepart* part = curl_mime_addpart(mime);
+        if (!part) continue;
+        curl_mime_name(part, kv.first.c_str());
+        curl_mime_data(part, kv.second.c_str(), CURL_ZERO_TERMINATED);
+    }
+
+    curl_mimepart* file_part = curl_mime_addpart(mime);
+    if (!file_part) {
+        curl_mime_free(mime);
+        result->success = false;
+        result->error = "mime part init failed";
+        result->completed = true;
+        return;
+    }
+    curl_mime_name(file_part, file_field_name.c_str());
+    curl_mime_filename(file_part, file_name_on_server.c_str());
+    curl_mime_type(file_part, "application/octet-stream");
+    // CURLOPT_MIMEPOST takes ownership of the mime object; on failure it must
+    // be freed manually.
+    const CURLcode filedata_rc = curl_mime_filedata(file_part, file_path.c_str());
+    if (filedata_rc != CURLE_OK) {
+        curl_mime_free(mime);
+        result->success = false;
+        result->error = curl_easy_strerror(filedata_rc);
+        result->completed = true;
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeToString);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result->body);
+    curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 120L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+    struct curl_slist* headerList = buildHeaderList(headers);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headerList);
+
+    const CURLcode code = curl_easy_perform(curl);
+
+    if (code == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result->statusCode);
+        result->success = result->statusCode >= 200 && result->statusCode < 300;
+        if (!result->success && result->body.empty()) {
+            result->error = "HTTP " + std::to_string(result->statusCode);
+        }
+    } else {
+        result->success = false;
+        result->error = curl_easy_strerror(code);
+    }
+
+    // CURLOPT_MIMEPOST consumed mime on success; after the transfer it must be
+    // freed in all cases.
+    curl_mime_free(mime);
+    if (headerList) {
+        curl_slist_free_all(headerList);
+    }
+    result->completed = true;
+}
+
 class TaskQueue {
 public:
     // Every async HTTP call in the app (cover downloads, ROM list/detail
@@ -351,6 +443,36 @@ std::shared_ptr<HttpResult> HttpClient::downloadFileAsync(
     auto result = std::make_shared<HttpResult>();
     queue()->enqueue([=]() {
         performDownload(url, headers, outputPath, result);
+    }, priority);
+    return result;
+}
+
+std::shared_ptr<HttpResult> HttpClient::uploadFileAsync(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    const std::map<std::string, std::string>& fields,
+    const std::string& file_field_name,
+    const std::string& file_path,
+    const std::string& file_name_on_server,
+    HttpPriority priority) {
+
+    auto result = std::make_shared<HttpResult>();
+    queue()->enqueue([=]() {
+        performUpload(url, headers, fields, file_field_name, file_path,
+                      file_name_on_server, result);
+    }, priority);
+    return result;
+}
+
+std::shared_ptr<HttpResult> HttpClient::postJsonAsync(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    const std::string& json_body,
+    HttpPriority priority) {
+
+    auto result = std::make_shared<HttpResult>();
+    queue()->enqueue([=]() {
+        performRequest(true, url, headers, json_body, result);
     }, priority);
     return result;
 }

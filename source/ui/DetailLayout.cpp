@@ -6,6 +6,7 @@
 #include "CoverProfile.hpp"
 #include "CoverCache.hpp"
 #include "UninstallConfirmModal.hpp"
+#include "SyncModal.hpp"
 #include "../model/RommApi.hpp"
 #include "../model/ConfigManager.hpp"
 #include "../i18n/I18n.hpp"
@@ -62,12 +63,73 @@ namespace romm::ui {
         constexpr s32 SECTION_TITLE_TO_CONTENT_GAP = 15; // 8-12px at 720p scaled by 1.5 -> ~15px
     }
 
+    // Fills an arbitrary triangle by scanline: for each pixel row the edges
+    // that straddle it give the covered x-span, drawn as a 1px rectangle.
+    // The renderer has no polygon primitive, so this is the cheap way to get
+    // chevron arrows for the description scroll hint.
+    static void FillTriangle(pu::ui::render::Renderer::Ref& drawer,
+                             s32 x1, s32 y1, s32 x2, s32 y2, s32 x3, s32 y3,
+                             pu::ui::Color color) {
+        const s32 min_y = std::min(y1, std::min(y2, y3));
+        const s32 max_y = std::max(y1, std::max(y2, y3));
+        if (min_y == max_y) return;
+
+        for (s32 y = min_y; y <= max_y; ++y) {
+            s32 span_min = 0x7FFFFFFF;
+            s32 span_max = -0x7FFFFFFF;
+            const s32 edges[3][4] = {
+                { x1, y1, x2, y2 },
+                { x2, y2, x3, y3 },
+                { x3, y3, x1, y1 }
+            };
+            for (int e = 0; e < 3; ++e) {
+                const s32 ax = edges[e][0], ay = edges[e][1];
+                const s32 bx = edges[e][2], by = edges[e][3];
+                if (ay == by) continue; // horizontal edge: no span info
+                if ((y < ay && y < by) || (y > ay && y > by)) continue;
+                const s32 ex = ax + (s32)(((int64_t)(y - ay) * (bx - ax)) / (by - ay));
+                if (ex < span_min) span_min = ex;
+                if (ex > span_max) span_max = ex;
+            }
+            if (span_min <= span_max) {
+                drawer->RenderRectangleFill(color, span_min, y, span_max - span_min + 1, 1);
+            }
+        }
+    }
+
+    void DescriptionScrollTip::OnRender(pu::ui::render::Renderer::Ref& drawer,
+                                        const s32 x_coord, const s32 y_coord) {
+        if (!layout) return;
+        const int max_off = layout->GetMaxDescriptionScrollOffset();
+        if (max_off <= 0) return; // description fits: nothing to hint
+        const int off = layout->GetDescriptionScrollOffset();
+
+        const pu::ui::Color color(230, 199, 167, 255);
+
+        // One chevron per direction, stacked at the right edge of the wrap
+        // area and vertically centred on the description window. Down hints
+        // there is more text below; up hints the user can scroll back.
+        const s32 chev_w = 16;
+        const s32 chev_h = 10;
+        const s32 cx = x_coord + w - chev_w - 6;
+        const s32 cy = y_coord + h / 2;
+
+        if (off > 0) {
+            // Up chevron (triangle pointing up).
+            FillTriangle(drawer, cx, cy + chev_h, cx + chev_w, cy + chev_h, cx + chev_w / 2, cy, color);
+        }
+        if (off < max_off) {
+            // Down chevron (triangle pointing down), 14px below the up one.
+            FillTriangle(drawer, cx, cy + 14, cx + chev_w, cy + 14, cx + chev_w / 2, cy + 14 + chev_h, color);
+        }
+    }
+
 
     static std::vector<std::string> WordWrapLinesPixel(const std::string& font_name, const std::string& text, s32 max_width_px) {
         std::vector<std::string> lines;
         std::string current_line;
         std::string word;
-        
+
         for (char c : text) {
             if (c == ' ' || c == '\n') {
                 std::string test_line = current_line;
@@ -75,7 +137,7 @@ namespace romm::ui {
                     test_line += " ";
                 }
                 test_line += word;
-                
+
                 s32 test_w = pu::ui::render::GetTextWidth(font_name, test_line);
                 if (test_w > max_width_px && !current_line.empty()) {
                     lines.push_back(current_line);
@@ -84,7 +146,7 @@ namespace romm::ui {
                     current_line = test_line;
                 }
                 word.clear();
-                
+
                 if (c == '\n') {
                     lines.push_back(current_line);
                     current_line.clear();
@@ -155,7 +217,7 @@ namespace romm::ui {
 
         // Try to pre-populate cover_tex with a cached grid texture immediately to avoid blanking
         std::string norm_slug = romm::model::NormalizePlatformSlug(ctx.platform_slug);
-        
+
         // Fixed cover art viewport container (stable per platform aspect ratio)
         s32 cover_x = x + 40;
         s32 cover_y = y + 40;
@@ -278,14 +340,14 @@ namespace romm::ui {
         FullscreenKeys keys;
         auto nav = nav_mgr.lock();
         if (!nav) return keys;
-        
+
         auto model = nav->GetModel();
         if (!model) return keys;
-        
+
         int rom_id = ctx.rom_id;
         const auto* detail = model->GetCachedDetail(rom_id);
         std::string norm_slug = romm::model::NormalizePlatformSlug(ctx.platform_slug);
-        
+
         bool is_psp = (norm_slug == "psp");
         bool is_nds = (norm_slug == "nds" || norm_slug == "nintendo-ds" || norm_slug == "nintendo_ds" || norm_slug == "Nintendo DS");
         bool is_3ds = (norm_slug == "3ds");
@@ -304,7 +366,7 @@ namespace romm::ui {
         if (is_nds || is_3ds || is_gameboy_family) { small_w = 380; small_h = 344; }
         else if (is_psp) { small_w = 247; small_h = 378; }
         else if (is_ps1) { small_w = 240; small_h = 240; }
-        
+
         // 1. Miximage Key
         if (detail && !detail->miximage_v2_url.empty()) {
             keys.miximage_key.rom_id = rom_id;
@@ -314,7 +376,7 @@ namespace romm::ui {
             keys.miximage_key.requested_width = big_w;
             keys.miximage_key.requested_height = big_h;
         }
-        
+
         // 2. Large Cover Key
         std::string large_source = "";
         if (detail && !detail->path_cover_large.empty()) {
@@ -330,7 +392,7 @@ namespace romm::ui {
             keys.large_key.requested_width = big_w;
             keys.large_key.requested_height = big_h;
         }
-        
+
         // 3. Small Cover Key
         if (!ctx.cover_path.empty()) {
             keys.small_key.rom_id = rom_id;
@@ -340,7 +402,7 @@ namespace romm::ui {
             keys.small_key.requested_width = small_w;
             keys.small_key.requested_height = small_h;
         }
-        
+
         return keys;
     }
 
@@ -363,7 +425,7 @@ namespace romm::ui {
     void DetailCard::InitTextures() {
         ClearTextures();
         pu::ui::Color text_color(237, 229, 251, 255); // #EDE5FB
-        
+
         // The action button is 430px wide; these labels are sized to fit there
         // in every shipped language.
         tex_btn_download = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.download"), text_color);
@@ -377,10 +439,7 @@ namespace romm::ui {
         tex_btn_add_to_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.add_to_queue"), text_color);
         tex_btn_remove_from_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.remove_from_queue"), text_color);
 
-        details_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.details"), text_color);
-        save_data_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.save_data"), text_color);
-        mods_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.mods"), text_color);
-        cheats_tex = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.tab.cheats"), text_color);
+        tex_btn_sync = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.sync"), text_color);
 
         cover_placeholder_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.no_image"), text_color);
         loading_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.loading"), text_color);
@@ -400,18 +459,15 @@ namespace romm::ui {
         if (tex_btn_downloaded) { pu::ui::render::DeleteTexture(tex_btn_downloaded); tex_btn_downloaded = nullptr; }
         if (tex_btn_failed) { pu::ui::render::DeleteTexture(tex_btn_failed); tex_btn_failed = nullptr; }
         if (tex_btn_unsupported) { pu::ui::render::DeleteTexture(tex_btn_unsupported); tex_btn_unsupported = nullptr; }
-        
+
         if (tex_btn_uninstall) { pu::ui::render::DeleteTexture(tex_btn_uninstall); tex_btn_uninstall = nullptr; }
         if (tex_btn_confirm_uninstall) { pu::ui::render::DeleteTexture(tex_btn_confirm_uninstall); tex_btn_confirm_uninstall = nullptr; }
         if (tex_btn_add_to_queue) { pu::ui::render::DeleteTexture(tex_btn_add_to_queue); tex_btn_add_to_queue = nullptr; }
         if (tex_btn_remove_from_queue) { pu::ui::render::DeleteTexture(tex_btn_remove_from_queue); tex_btn_remove_from_queue = nullptr; }
-        
+        if (tex_btn_sync) { pu::ui::render::DeleteTexture(tex_btn_sync); tex_btn_sync = nullptr; }
+
         if (dynamic_download_tex) { pu::ui::render::DeleteTexture(dynamic_download_tex); dynamic_download_tex = nullptr; }
 
-        if (details_tex) { pu::ui::render::DeleteTexture(details_tex); details_tex = nullptr; }
-        if (save_data_tex) { pu::ui::render::DeleteTexture(save_data_tex); save_data_tex = nullptr; }
-        if (mods_tex) { pu::ui::render::DeleteTexture(mods_tex); mods_tex = nullptr; }
-        if (cheats_tex) { pu::ui::render::DeleteTexture(cheats_tex); cheats_tex = nullptr; }
         if (cover_placeholder_tex) { pu::ui::render::DeleteTexture(cover_placeholder_tex); cover_placeholder_tex = nullptr; }
         if (loading_tex) { pu::ui::render::DeleteTexture(loading_tex); loading_tex = nullptr; }
         if (title_tex) { pu::ui::render::DeleteTexture(title_tex); title_tex = nullptr; }
@@ -442,6 +498,14 @@ namespace romm::ui {
         }
     }
 
+    void DetailCard::ToggleImageMode() {
+        cover_mode_miximage = !cover_mode_miximage;
+        std::cout << "[DETAIL] Image mode: " << (cover_mode_miximage ? "miximage" : "cover") << std::endl;
+        // Re-resolve the target; the current texture stays on screen until the
+        // newly requested one is ready, so the swap is never a blank frame.
+        ResolveDetailImageState(true);
+    }
+
     void DetailCard::ResolveDetailImageState(bool allow_download) {
         if (!is_active) {
             return;
@@ -462,7 +526,9 @@ namespace romm::ui {
             return;
         }
 
-        // 1. Centralized target resolution
+        // 1. Centralized target resolution. The cover is the default image;
+        // the miximage is only shown when the user explicitly switched to it
+        // with the R analog stick (cover_mode_miximage) — never automatically.
         std::string target_source = ctx.cover_path;
         std::string target_variant = "small";
 
@@ -475,28 +541,36 @@ namespace romm::ui {
             romm::model::ConfigManager::Instance().GetCoversQuality() != romm::model::CoversQuality::SD;
 
         romm::model::DetailLoadState state = model->GetDetailState(rom_id);
-        if (allow_large_cover && state == romm::model::DetailLoadState::Loaded) {
+        if (state == romm::model::DetailLoadState::Loaded) {
             const auto* detail = model->GetCachedDetail(rom_id);
             if (detail) {
                 std::string miximage_url = detail->miximage_v2_url;
                 std::string large_url = detail->path_cover_large;
 
-                // Query CoverCache for permanent failure state
-                CoverCacheKey mix_key = expected_identity.cache_key;
-                mix_key.cover_source = miximage_url;
-                mix_key.variant = "miximage_v2";
-                int mix_w = 0, mix_h = 0;
-                GetVariantDimensions("miximage_v2", mix_w, mix_h);
-                mix_key.requested_width = mix_w;
-                mix_key.requested_height = mix_h;
+                // Prefetch the miximage (and learn its state) so switching to
+                // it with the R analog stick is instant, but never select it
+                // as the target unless the user asked for it.
+                CoverState mix_state = CoverState::Missing;
+                if (!miximage_url.empty()) {
+                    CoverCacheKey mix_key = expected_identity.cache_key;
+                    mix_key.cover_source = miximage_url;
+                    mix_key.variant = "miximage_v2";
+                    int mix_w = 0, mix_h = 0;
+                    GetVariantDimensions("miximage_v2", mix_w, mix_h);
+                    mix_key.requested_width = mix_w;
+                    mix_key.requested_height = mix_h;
 
-                auto mix_res = CoverCache::Instance().GetOrRequest(rom_id, ctx.platform_slug, miximage_url, currentCoverProfile.type, "miximage_v2", false, actual_cover_w, actual_cover_h);
+                    auto mix_res = CoverCache::Instance().GetOrRequest(
+                        rom_id, ctx.platform_slug, miximage_url, currentCoverProfile.type,
+                        "miximage_v2", false, actual_cover_w, actual_cover_h);
+                    mix_state = mix_res.state;
+                }
 
-                if (!miximage_url.empty() && mix_res.state != CoverState::FailedPermanent) {
+                if (cover_mode_miximage && !miximage_url.empty() && mix_state != CoverState::FailedPermanent) {
                     target_source = miximage_url;
                     target_variant = "miximage_v2";
-                } else if (!large_url.empty()) {
-                    CoverCacheKey large_key = mix_key;
+                } else if (allow_large_cover && !large_url.empty()) {
+                    CoverCacheKey large_key = expected_identity.cache_key;
                     large_key.cover_source = large_url;
                     large_key.variant = "big";
                     int l_w = 0, l_h = 0;
@@ -504,7 +578,9 @@ namespace romm::ui {
                     large_key.requested_width = l_w;
                     large_key.requested_height = l_h;
 
-                    auto large_res = CoverCache::Instance().GetOrRequest(rom_id, ctx.platform_slug, large_url, currentCoverProfile.type, "big", false, actual_cover_w, actual_cover_h);
+                    auto large_res = CoverCache::Instance().GetOrRequest(
+                        rom_id, ctx.platform_slug, large_url, currentCoverProfile.type,
+                        "big", false, actual_cover_w, actual_cover_h);
                     if (large_res.state != CoverState::FailedPermanent) {
                         target_source = large_url;
                         target_variant = "big";
@@ -554,7 +630,7 @@ namespace romm::ui {
             cover_tex = result.texture;
             displayed_key = result.key;
             request_state = DetailRequestState::Idle;
-            
+
             if (result.key.variant == "miximage_v2") {
                 display_state = DetailDisplayState::MiximageReady;
                 cover_state = DetailCoverState::UsingMiximage;
@@ -674,9 +750,9 @@ namespace romm::ui {
         s32 btn_h = 80;
         s32 btn_w = cover_w; // 430
         s32 btn_x = cover_x; // 190
-        
+
         bool actions_focused = (nav->GetDetailFocus() == romm::navigation::DetailFocus::Actions);
-        
+
         pu::ui::Color btn_bg(16, 18, 22, 255); // Web Dark Slate (#101216)
         pu::ui::Color btn_border;
         s32 btn_border_w = 0;
@@ -692,189 +768,17 @@ namespace romm::ui {
         drawer->RenderRoundedRectangleFill(btn_border, btn_x, btn_y, btn_w, btn_h, 8);
         drawer->RenderRoundedRectangleFill(btn_bg, btn_x + btn_border_w, btn_y + btn_border_w, btn_w - (btn_border_w * 2), btn_h - (btn_border_w * 2), 6);
 
-        pu::sdl2::Texture active_btn_tex = tex_btn_download;
-        bool draw_progress_bar = false;
-        float progress_pct = 0.0f;
-        std::string new_dynamic_text = "";
-
-        int rom_id = ctx.rom_id;
-        auto model = nav->GetModel();
-        
-        if (rom_id > 0 && model) {
-            auto& dl_mgr = romm::model::DownloadManager::Instance();
-            auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
-            auto active_snap = dl_mgr.GetActiveDownloadSnapshot();
-            std::string platform_slug = ctx.platform_slug;
-
-            if (rom_id != checked_rom_id) {
-                checked_rom_id = rom_id;
-                file_exists_checked = false;
-                final_file_exists = false;
-                part_file_exists = false;
-                const auto* detail_pre = model->GetCachedDetail(rom_id);
-                if (detail_pre) {
-                    // Multi-disc games are identified on disk by their root .m3u, not
-                    // the top-level fs_name (a folder) — resolve the right check name.
-                    std::string check_name = dl_mgr.InstallIdentityFilename(
-                        platform_slug, detail_pre->files, detail_pre->file_name);
-                    if (!check_name.empty()) {
-                        dl_mgr.RefreshInstallCache(platform_slug, check_name);
-                    }
-                }
-            }
-
-            {
-                const auto* detail = model->GetCachedDetail(rom_id);
-                std::string check_name;
-                if (detail) {
-                    check_name = dl_mgr.InstallIdentityFilename(
-                        platform_slug, detail->files, detail->file_name);
-                }
-                if (!check_name.empty()) {
-                    final_file_exists = dl_mgr.GetCachedInstallState(platform_slug, check_name);
-                } else {
-                    final_file_exists = false;
-                }
-            }
-
-            current_action_state = ComputeDownloadActionState(rom_id, platform_slug, model->GetCachedDetail(rom_id));
-
-            bool is_ps1 = ctx.is_ps1;
-
-            if (current_action_state == DownloadActionState::Uninstall) {
-                active_btn_tex = tex_btn_uninstall;
-            } else if (current_action_state == DownloadActionState::Downloading) {
-                if (task_snap.state == romm::model::DownloadState::DownloadingGame) {
-                    draw_progress_bar = true;
-                    long long down = task_snap.downloaded_bytes;
-                    long long total = task_snap.total_bytes;
-                    if (total > 0) {
-                        progress_pct = (float)down / total;
-                        int pct_int = (int)(progress_pct * 100);
-                        new_dynamic_text = romm::i18n::format("detail.btn.downloading_percent",
-                                                              {{"percent", std::to_string(pct_int)}});
-                    } else {
-                        new_dynamic_text = romm::i18n::tr("detail.btn.downloading");
-                    }
-                } else if (task_snap.state == romm::model::DownloadState::DownloadingCover) {
-                    new_dynamic_text = romm::i18n::tr("detail.btn.downloading_cover");
-                } else if (task_snap.state == romm::model::DownloadState::SyncingCover) {
-                    new_dynamic_text = romm::i18n::tr("detail.btn.syncing_cover");
-                } else {
-                    active_btn_tex = tex_btn_preparing;
-                }
-            } else if (current_action_state == DownloadActionState::Queued) {
-                auto queue = dl_mgr.GetQueueSnapshot();
-                int q_pos = 0;
-                for (const auto& t : queue) {
-                    if (t.state == romm::model::DownloadState::Queued) q_pos++;
-                    if (t.rom_id == rom_id) break;
-                }
-                new_dynamic_text = romm::i18n::format("detail.btn.queued", {{"position", std::to_string(q_pos)}});
-            } else if (current_action_state == DownloadActionState::Failed) {
-                active_btn_tex = tex_btn_failed;
-            } else if (current_action_state == DownloadActionState::AddToQueue) {
-                if (!is_ps1 && platform_slug != "psp" && platform_slug != "nds" && platform_slug != "gb" && platform_slug != "gbc" && platform_slug != "gba" && platform_slug != "ps2" && platform_slug != "3ds") active_btn_tex = tex_btn_unsupported;
-                else active_btn_tex = tex_btn_add_to_queue;
-            } else {
-                if (!is_ps1 && platform_slug != "psp" && platform_slug != "nds" && platform_slug != "gb" && platform_slug != "gbc" && platform_slug != "gba" && platform_slug != "ps2" && platform_slug != "3ds") active_btn_tex = tex_btn_unsupported;
-                else active_btn_tex = tex_btn_download;
-            }
-            
-            if (!new_dynamic_text.empty()) {
-                if (current_dynamic_text != new_dynamic_text || dynamic_download_tex == nullptr) {
-                    if (dynamic_download_tex) {
-                        pu::ui::render::DeleteTexture(dynamic_download_tex);
-                    }
-                    pu::ui::Color text_color(237, 229, 251, 255);
-                    dynamic_download_tex = pu::ui::render::RenderText("Orbitron@30", new_dynamic_text, text_color);
-                    current_dynamic_text = new_dynamic_text;
-                }
-                active_btn_tex = dynamic_download_tex;
-            }
-        }
-
-        if (active_btn_tex) {
-            s32 tw = pu::ui::render::GetTextureWidth(active_btn_tex);
-            s32 th = pu::ui::render::GetTextureHeight(active_btn_tex);
-            drawer->RenderTexture(active_btn_tex, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
-        }
-
-        // Draw Progress Bar if needed
-        if (draw_progress_bar) {
-            s32 pb_h = 14;
-            s32 pb_w = btn_w;
-            s32 pb_x = btn_x;
-            s32 pb_y = btn_y + btn_h + 10;
-            
-            pu::ui::Color pb_bg(16, 18, 22, 255);
-            pu::ui::Color pb_fill(85, 63, 152, 255); // Violet accent
-            
-            drawer->RenderRoundedRectangleFill(pb_bg, pb_x, pb_y, pb_w, pb_h, 6);
-            if (progress_pct > 0.0f) {
-                s32 fill_w = (s32)(pb_w * progress_pct);
-                if (fill_w > 0) {
-                    drawer->RenderRoundedRectangleFill(pb_fill, pb_x, pb_y, fill_w, pb_h, 6);
-                }
-            }
-        }
-
-        // Tabs Row (4 tabs)
-        s32 tab_x_start = x_coord + 510;
-        s32 tab_y = y_coord + TAB_Y_OFFSET;
-        s32 tab_w = 240;
-        s32 tab_h = TAB_HEIGHT;
-        s32 tab_spacing = 20;
-
-        bool tabs_focused = (nav->GetDetailFocus() == romm::navigation::DetailFocus::Tabs);
-        size_t selected_tab_idx = nav->GetSelectedDetailTabIdx();
-
-        for (size_t i = 0; i < DetailCard::GetTabCount(); ++i) {
-            s32 tx = tab_x_start + i * (tab_w + tab_spacing);
-            bool is_active_tab = (i == selected_tab_idx);
-
-            pu::ui::Color t_bg;
-            pu::ui::Color t_border;
-            s32 t_border_w = 0;
-
-            if (is_active_tab) {
-                t_bg = pu::ui::Color(85, 63, 152, 255); // Violet highlight capsule (#553F98)
-                if (tabs_focused) {
-                    t_border = pu::ui::Color(230, 199, 167, 255); // Cream border
-                    t_border_w = 3;
-                }
-            } else {
-                t_bg = pu::ui::Color(16, 18, 22, 255); // Web Dark Slate (#101216)
-                t_border = pu::ui::Color(45, 50, 62, 255); // Slate Border Grey (#2D323E)
-                t_border_w = 2;
-            }
-
-            if (t_border_w > 0) {
-                drawer->RenderRoundedRectangleFill(t_border, tx, tab_y, tab_w, tab_h, 8);
-                drawer->RenderRoundedRectangleFill(t_bg, tx + t_border_w, tab_y + t_border_w, tab_w - (t_border_w * 2), tab_h - (t_border_w * 2), 6);
-            } else {
-                drawer->RenderRoundedRectangleFill(t_bg, tx, tab_y, tab_w, tab_h, 8);
-            }
-
-            pu::sdl2::Texture tab_tex;
-            switch(i) {
-                case 0: tab_tex = details_tex; break;
-                case 1: tab_tex = save_data_tex; break;
-                case 2: tab_tex = mods_tex; break;
-                case 3: tab_tex = cheats_tex; break;
-                default: tab_tex = nullptr; break;
-            }
-
-            if (tab_tex) {
-                s32 tw = pu::ui::render::GetTextureWidth(tab_tex);
-                s32 th = pu::ui::render::GetTextureHeight(tab_tex);
-                drawer->RenderTexture(tab_tex, tx + (tab_w - tw) / 2, tab_y + (tab_h - th) / 2);
-            }
+        // The sync button is the sole detail action. Its status lives in the
+        // sync modal; the button only reports availability.
+        if (tex_btn_sync) {
+            s32 tw = pu::ui::render::GetTextureWidth(tex_btn_sync);
+            s32 th = pu::ui::render::GetTextureHeight(tex_btn_sync);
+            drawer->RenderTexture(tex_btn_sync, btn_x + (btn_w - tw) / 2, btn_y + (btn_h - th) / 2);
         }
 
         // Render Game Title with Marquee Scrolling
         s32 max_title_w = 1060;
-        
+
         // Update delta time
         auto marquee_now = std::chrono::steady_clock::now();
         float marquee_dt = 0.0f;
@@ -980,7 +884,7 @@ namespace romm::ui {
     }
 
     void DetailCard::OnInput(const u64 keys_down, const u64 keys_up, const u64 keys_held, const pu::ui::TouchPoint touch_pos) {
-        // NavigationManager handles inputs, we don't need to do much here, 
+        // NavigationManager handles inputs, we don't need to do much here,
         // except we could use this if we wanted isolated input.
     }
 
@@ -1034,6 +938,17 @@ namespace romm::ui {
         desc_text->SetColor(pu::ui::Color(237, 229, 251, 255));
         this->Add(desc_text);
 
+        // Scroll tip for the description (chevron arrows): drawn after the
+        // text block so it sits on top; renders nothing when the text fits.
+        // The element is wider than the wrap area so the chevrons land in
+        // the card's right margin, clear of the text.
+        {
+            const s32 desc_bottom = 750;
+            auto tip = DescriptionScrollTip::New(660, section_content_y, 1060,
+                                                 desc_bottom - section_content_y, this);
+            this->Add(tip);
+        }
+
         // Trailer Link block (Ubuntu, Light Lavender, moved down to x=660, y=780)
         trailer_title_text = pu::ui::elm::TextBlock::New(660, 780, "");
         trailer_title_text->SetFont("Ubuntu@30");
@@ -1054,6 +969,11 @@ namespace romm::ui {
         hint_text->SetFont("Ubuntu@30");
         hint_text->SetColor(pu::ui::Color(190, 180, 225, 255));
         this->Add(hint_text);
+
+        // Fullscreen overlay: added last so it draws above every other
+        // element of the layout, dim included.
+        auto sync_modal = romm::ui::SyncModal::New(nav);
+        this->Add(sync_modal);
     }
 
     void DetailLayout::RefreshTranslations() {
@@ -1077,7 +997,6 @@ namespace romm::ui {
         game_title_text->SetText("");
         platform_text->SetText("");
 
-        size_t tab_idx = nav->GetSelectedDetailTabIdx();
         int rom_id = ctx.rom_id;
         romm::model::DetailLoadState state = model->GetDetailState(rom_id);
         const auto* detail = model->GetCachedDetail(rom_id);
@@ -1086,7 +1005,7 @@ namespace romm::ui {
             card->ResolveDetailImageState(true);
         }
 
-        if (tab_idx == 0) { // DETAILS
+        { // DETAILS (the only remaining tab)
             if (state == romm::model::DetailLoadState::Loading || state == romm::model::DetailLoadState::NotLoaded) {
                 meta_text->SetText(romm::i18n::tr("detail.loading_details"));
                 desc_title_text->SetText(romm::i18n::tr("detail.section.description"));
@@ -1130,9 +1049,9 @@ namespace romm::ui {
                 // RomM's description verbatim; only the empty-state line is ours.
                 std::string desc = detail->description;
                 if (desc.empty()) desc = romm::i18n::tr("detail.no_description");
-                
+
                 std::cout << "[DETAIL] Description source rom=" << detail->rom_id << std::endl;
-                
+
                 descriptionLines = WordWrapLinesPixel("Ubuntu@30", desc, 1020);
 
                 const s32 card_y = 150;
@@ -1164,27 +1083,6 @@ namespace romm::ui {
             }
             trailer_title_text->SetText("");
         }
-        else if (tab_idx == 1) { // SAVE DATA
-            meta_text->SetText("");
-            desc_title_text->SetText(romm::i18n::tr("detail.section.save_data"));
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
-        }
-        else if (tab_idx == 2) { // MODS
-            meta_text->SetText("");
-            desc_title_text->SetText("");
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
-        }
-        else if (tab_idx == 3) { // CHEATS
-            meta_text->SetText("");
-            desc_title_text->SetText("");
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
-            trailer_title_text->SetText("");
-            UpdateFooterHints();
-        }
         UpdateDownloadStatus();
     }
 
@@ -1198,7 +1096,7 @@ namespace romm::ui {
 
     void DetailLayout::ScrollDescription(int direction) {
         if (descriptionLines.empty() || maxDescriptionScrollOffset <= 0) return;
-        
+
         const s32 card_y = 150;
         const s32 tabs_bottom = card_y + TAB_Y_OFFSET + TAB_HEIGHT; // 380
         const s32 section_title_y = tabs_bottom + TABS_TO_SECTION_GAP; // 400
@@ -1216,7 +1114,7 @@ namespace romm::ui {
                 descriptionScrollOffset--;
             }
         }
-        
+
         std::string visible_desc;
         for (size_t i = 0; i < max_visible && (descriptionScrollOffset + i) < descriptionLines.size(); ++i) {
             visible_desc += descriptionLines[descriptionScrollOffset + i];
@@ -1229,30 +1127,18 @@ namespace romm::ui {
 
     void DetailLayout::UpdateFooterHints() {
         if (!hint_text) return;
-        
+
         auto nav = nav_mgr.lock();
         if (!nav) return;
-        
-        bool has_image = false;
-        if (card && card->GetCoverTexture() != nullptr &&
-            card->GetCoverState() != DetailCoverState::Placeholder &&
-            card->GetCoverState() != DetailCoverState::Failed) {
-            has_image = true;
-        }
-        
+
         auto focus = nav->GetDetailFocus();
 
-        // Four whole hint lines rather than a base string with translated
+        // Two whole hint lines rather than a base string with translated
         // prefixes/suffixes glued on: which segments appear, and in what order,
         // is a property of the sentence and belongs to the translator.
-        const char* key = "hint.detail.cover";
-        if (focus != romm::navigation::DetailFocus::Cover) {
-            const bool scrollable = (maxDescriptionScrollOffset > 0);
-            key = (has_image && scrollable) ? "hint.detail.panel_image_scroll"
-                : (has_image)               ? "hint.detail.panel_image"
-                : (scrollable)              ? "hint.detail.panel_scroll"
-                                            : "hint.detail.panel";
-        }
+        const char* key = (focus == romm::navigation::DetailFocus::Cover)
+                              ? "hint.detail.cover"
+                              : "hint.detail.panel";
 
         hint_text->SetText(romm::i18n::tr(key));
     }
@@ -1286,7 +1172,11 @@ namespace romm::ui {
 
     void FullscreenImageElement::SetKeys(const FullscreenKeys& new_keys) {
         keys = new_keys;
-        if (keys.miximage_key.rom_id > 0 && !keys.miximage_key.cover_source.empty()) {
+        // Open on the cover, matching the detail card's default image; the
+        // miximage is only reached by cycling (L/R or R analog stick).
+        if (keys.large_key.rom_id > 0 && !keys.large_key.cover_source.empty()) {
+            current_mode = FullscreenMode::LargeCover;
+        } else if (keys.miximage_key.rom_id > 0 && !keys.miximage_key.cover_source.empty()) {
             current_mode = FullscreenMode::MixImage;
         } else {
             current_mode = FullscreenMode::LargeCover;
@@ -1301,7 +1191,7 @@ namespace romm::ui {
             bool valid = false;
             if (cur == 0 && keys.miximage_key.rom_id > 0 && !keys.miximage_key.cover_source.empty()) valid = true;
             if (cur == 1 && keys.large_key.rom_id > 0 && !keys.large_key.cover_source.empty()) valid = true;
-            
+
             if (valid) {
                 next = cur;
                 break;

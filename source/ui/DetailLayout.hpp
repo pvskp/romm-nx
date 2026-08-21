@@ -89,10 +89,6 @@ namespace romm::ui {
         s32 x, y, w, h;
         std::weak_ptr<romm::navigation::NavigationManager> nav_mgr;
 
-        pu::sdl2::Texture details_tex = nullptr;
-        pu::sdl2::Texture save_data_tex = nullptr;
-        pu::sdl2::Texture mods_tex = nullptr;
-        pu::sdl2::Texture cheats_tex = nullptr;
         pu::sdl2::Texture cover_placeholder_tex = nullptr;
         pu::sdl2::Texture loading_tex = nullptr;
 
@@ -106,6 +102,8 @@ namespace romm::ui {
         pu::sdl2::Texture tex_btn_confirm_uninstall = nullptr;
         pu::sdl2::Texture tex_btn_add_to_queue = nullptr;
         pu::sdl2::Texture tex_btn_remove_from_queue = nullptr;
+
+        pu::sdl2::Texture tex_btn_sync = nullptr;
         
         pu::sdl2::Texture dynamic_download_tex = nullptr;
         std::string current_dynamic_text;
@@ -150,6 +148,11 @@ namespace romm::ui {
         uint64_t logged_apply_gen_val = 0;
         CoverState last_known_cache_state = CoverState::Unknown;
 
+        // User's image choice for the card viewport: false = cover (default),
+        // true = the game screenshot (miximage). Persists across game changes
+        // on this screen; toggled with the R analog stick.
+        bool cover_mode_miximage = false;
+
         void InitTextures();
         void ClearTextures();
         void GetVariantDimensions(const std::string& variant, int& w, int& h);
@@ -166,11 +169,16 @@ namespace romm::ui {
         // change — they're all pre-rendered at construction.
         void RefreshTranslations();
 
-        // Single source of truth for the tab count (Details/Save Data/Mods/
-        // Cheats) — OnRender's tab strip and NavigationManager's Right-
-        // navigation clamp both size against this instead of independently
-        // hardcoding the same number.
-        static constexpr size_t GetTabCount() { return 4; }
+        // Switches the image shown in the card's viewport between the cover
+        // and the game screenshot (miximage), keeping whichever the user did
+        // NOT pick until the other one is ready. Triggered by the R analog
+        // stick on the Detail screen — never automatic.
+        void ToggleImageMode();
+
+        // The card's right panel renders its content directly — there is no
+        // tab strip anymore (Save Data / Mods / Cheats / Details buttons were
+        // all non-functional). TAB_Y_OFFSET/TAB_HEIGHT still anchor the
+        // section geometry below.
 
         DetailCard(s32 x, s32 y, s32 w, s32 h, std::shared_ptr<romm::navigation::NavigationManager> nav);
         ~DetailCard() override;
@@ -229,7 +237,35 @@ namespace romm::ui {
         void UpdateFooterHints();
         std::shared_ptr<DetailCard> GetCard() { return card; }
 
+        // Scroll state of the description, read by the overflow tip element.
+        int GetDescriptionScrollOffset() const { return descriptionScrollOffset; }
+        int GetMaxDescriptionScrollOffset() const { return maxDescriptionScrollOffset; }
+
         PU_SMART_CTOR(DetailLayout)
+    };
+
+    // Floating scroll hint for the description area: a down chevron when
+    // there is more text below the fold, an up chevron once the user has
+    // scrolled. Drawn on top of the description text block, at the right
+    // edge of the wrap area. Renders nothing when the text fits.
+    class DescriptionScrollTip : public pu::ui::elm::Element {
+    private:
+        s32 x, y, w, h;
+        DetailLayout* layout;
+
+    public:
+        DescriptionScrollTip(s32 x, s32 y, s32 w, s32 h, DetailLayout* layout)
+            : Element::Element(), x(x), y(y), w(w), h(h), layout(layout) {}
+
+        s32 GetX() override { return x; }
+        s32 GetY() override { return y; }
+        s32 GetWidth() override { return w; }
+        s32 GetHeight() override { return h; }
+
+        void OnRender(pu::ui::render::Renderer::Ref& drawer, const s32 x_coord, const s32 y_coord) override;
+        void OnInput(const u64 keys_down, const u64 keys_up, const u64 keys_held, const pu::ui::TouchPoint touch_pos) override {}
+
+        PU_SMART_CTOR(DescriptionScrollTip)
     };
 
     enum class FullscreenMode {

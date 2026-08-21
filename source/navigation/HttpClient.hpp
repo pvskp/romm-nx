@@ -49,5 +49,26 @@ public:
         const std::string& outputPath,
         HttpPriority priority = HttpPriority::Normal);
 
+    // POST multipart/form-data with one file field (e.g. RomM's "saveFile")
+    // plus any number of textual fields. Runs on the HTTP pool; the returned
+    // result's `completed` flips when the transfer is done.
+    static std::shared_ptr<HttpResult> uploadFileAsync(
+        const std::string& url,
+        const std::map<std::string, std::string>& headers,
+        const std::map<std::string, std::string>& fields,
+        const std::string& file_field_name,
+        const std::string& file_path,
+        const std::string& file_name_on_server,
+        HttpPriority priority = HttpPriority::Normal);
+
+    // POST application/json with a raw JSON body (e.g. RomM's /api/states/delete).
+    // Runs on the HTTP pool; the returned result's `completed` flips when the
+    // transfer is done.
+    static std::shared_ptr<HttpResult> postJsonAsync(
+        const std::string& url,
+        const std::map<std::string, std::string>& headers,
+        const std::string& json_body,
+        HttpPriority priority = HttpPriority::Normal);
+
     static void runAsync(std::function<void()> task, HttpPriority priority = HttpPriority::Normal);
 };

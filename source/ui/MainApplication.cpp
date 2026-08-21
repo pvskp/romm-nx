@@ -86,7 +86,6 @@ namespace romm::ui {
             this->PollDeferredNetworkStart();
             this->PollNetworkRequests();
             this->PollDetailPrefetch();
-            this->PollBulkDownload();
             romm::model::ScreenWakeManager::Instance().Poll();
             romm::model::AudioManager::Instance().Poll();
             nav_mgr->PollUpdateNotification();
@@ -301,6 +300,20 @@ namespace romm::ui {
             auto lib_lyt = nav_mgr->GetLibraryLayout();
             if (lib_lyt) {
                 lib_lyt->OnSelectionUpdated();
+
+                // A fresh ROMs result also (re)runs the two background
+                // downloaders for the loaded platform: the platform-wide cover
+                // prefetch so the Games section shows art without scrolling,
+                // and — when X was pressed on an unloaded platform in the
+                // sidebar — the pending auto-mark of the whole collection.
+                if (!req->games.empty()) {
+                    if (auto grid = lib_lyt->GetGameGrid()) {
+                        grid->PrefetchAllCovers();
+                    }
+                    if (nav_mgr->ConsumePendingMarkPlatform(std::to_string(plat_id), req->games)) {
+                        lib_lyt->OnSelectionUpdated();
+                    }
+                }
             }
         }
 
@@ -387,43 +400,6 @@ namespace romm::ui {
         if (plat_idx >= platforms.size()) return;
 
         TriggerFetchRomDetail(rom_id, 0, romm::model::NormalizePlatformSlug(platforms[plat_idx].slug));
-    }
-
-    void MainApplication::EnqueueBulkDownload(int rom_id, const std::string& platform_slug, const std::string& title) {
-        if (rom_id <= 0) return;
-        for (const auto& item : bulk_queue) {
-            if (item.rom_id == rom_id) return;
-        }
-        bulk_queue.push_back({ rom_id, platform_slug, title, false });
-    }
-
-    void MainApplication::PollBulkDownload() {
-        if (bulk_queue.empty()) return;
-        // Share the single detail slot with the detail screen and the panel;
-        // whoever is mid-flight finishes first.
-        if (pending_detail_req && !pending_detail_req->completed) return;
-
-        auto& item = bulk_queue.front();
-
-        if (const auto* detail = data_model->GetCachedDetail(item.rom_id)) {
-            romm::model::DownloadManager::Instance().EnqueueDownload(*detail, item.platform_slug, item.title);
-            std::cout << "[BULK] Queued download for rom " << item.rom_id
-                      << " (" << bulk_queue.size() - 1 << " remaining)" << std::endl;
-            bulk_queue.erase(bulk_queue.begin());
-            return;
-        }
-
-        const auto state = data_model->GetDetailState(item.rom_id);
-        if (state == romm::model::DetailLoadState::Failed || item.detail_requested) {
-            // One attempt each. Retrying forever would wedge the queue on a ROM
-            // the server won't return, and drop every game behind it.
-            std::cerr << "[BULK] Skipping rom " << item.rom_id << ": detail unavailable" << std::endl;
-            bulk_queue.erase(bulk_queue.begin());
-            return;
-        }
-
-        item.detail_requested = true;
-        TriggerFetchRomDetail(item.rom_id, 0, item.platform_slug);
     }
 
     void MainApplication::TriggerFetchRomDetail(int rom_id, uint64_t generation, const std::string& platform_slug) {

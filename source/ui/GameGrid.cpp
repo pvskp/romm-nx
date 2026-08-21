@@ -261,37 +261,10 @@ namespace romm::ui {
             return;
         }
 
-        // Platforms fetched fine, but Settings > Platforms hid every one of
-        // them. Draw that as its own state rather than falling through to a
-        // ROMs message about a platform that isn't there.
-        if (model->GetPlatforms().empty() && !model->GetAllPlatforms().empty()) {
-            ClearStatusTex();
-            ClearInfoTextures();
-            filtered_games.clear();
-            filter_generation++;
-            ClearListTextures();
-            ClearPanelTextures();
-            status_tex = pu::ui::render::RenderText("Ubuntu@37",
-                romm::i18n::tr("status.all_platforms_hidden"), text_color);
-            return;
-        }
+        // Platforms fetched fine — the sidebar shows every platform the server
+        // reports, so there is no "all hidden" state.
 
         auto roms_state = model->GetRomsState();
-        if (roms_state != romm::model::ApiState::Success) {
-            ClearStatusTex();
-            ClearInfoTextures();
-            const char* key = nullptr;
-            if (roms_state == romm::model::ApiState::WaitingNetwork) key = "status.waiting_network";
-            else if (roms_state == romm::model::ApiState::Idle) key = "status.select_platform";
-            else if (roms_state == romm::model::ApiState::Loading) key = "status.loading_roms";
-            else if (roms_state == romm::model::ApiState::FailedConnect) key = "status.failed_connect";
-            else if (roms_state == romm::model::ApiState::Unauthorized) key = "status.unauthorized";
-            else if (roms_state == romm::model::ApiState::NoData) key = "status.no_games";
-            if (key) {
-                status_tex = pu::ui::render::RenderText("Ubuntu@37", romm::i18n::tr(key), text_color);
-            }
-            return;
-        }
 
         const auto& platforms = model->GetPlatforms();
         if (platforms.empty()) return;
@@ -300,6 +273,30 @@ namespace romm::ui {
         if (plat_idx >= platforms.size()) return;
 
         const auto& current_platform = platforms.at(plat_idx);
+
+        // Sidebar hover previews load platforms in the background, so the
+        // global ROMs state can be "Loading" (or belong to another platform)
+        // while the platform under the cursor already has cached games. Those
+        // are rendered straight away; the status screen is only shown when
+        // there is genuinely nothing to draw for this platform yet.
+        if (current_platform.games.empty()) {
+            if (roms_state != romm::model::ApiState::Success) {
+                ClearStatusTex();
+                ClearInfoTextures();
+                const char* key = nullptr;
+                if (roms_state == romm::model::ApiState::WaitingNetwork) key = "status.waiting_network";
+                else if (roms_state == romm::model::ApiState::Idle) key = "status.select_platform";
+                else if (roms_state == romm::model::ApiState::Loading) key = "status.loading_roms";
+                else if (roms_state == romm::model::ApiState::FailedConnect) key = "status.failed_connect";
+                else if (roms_state == romm::model::ApiState::Unauthorized) key = "status.unauthorized";
+                else if (roms_state == romm::model::ApiState::NoData) key = "status.no_games";
+                if (key) {
+                    status_tex = pu::ui::render::RenderText("Ubuntu@37", romm::i18n::tr(key), text_color);
+                }
+                return;
+            }
+        }
+
         size_t letter_idx = nav->GetSelectedLetterIdx();
 
         // 1. Rebuild filtered games only if platform, letter, or the grid view
@@ -1273,6 +1270,26 @@ namespace romm::ui {
                 }
             }
         }
+    }
+
+    void GameGrid::PrefetchAllCovers() {
+        auto nav = nav_mgr.lock();
+        if (!nav) return;
+        auto model = nav->GetModel();
+        if (!model) return;
+
+        const auto& platforms = model->GetPlatforms();
+        size_t plat_idx = nav->GetLoadedPlatformIdx();
+        if (plat_idx >= platforms.size()) return;
+        if (filtered_games.empty()) return;
+
+        const std::string& platform_slug = platforms[plat_idx].slug;
+        auto quality = romm::model::ConfigManager::Instance().GetCoversQuality();
+        for (const auto& game : filtered_games) {
+            ResolveCoverTexture(game, platform_slug, current_profile.type, quality);
+        }
+        std::cout << "[COVER] Prefetched all " << filtered_games.size()
+                  << " covers of " << platforms[plat_idx].name << std::endl;
     }
 
 } // namespace romm::ui

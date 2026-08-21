@@ -3,7 +3,6 @@
 #include <string>
 #include <map>
 #include <mutex>
-#include <set>
 #include <vector>
 
 namespace romm::model {
@@ -39,9 +38,6 @@ namespace romm::model {
 
         const std::string& GetApiKey() const { return api_key; }
         void SetApiKey(const std::string& key) { api_key = key; }
-        
-        const std::string& GetPsxDownloadDir() const { return psx_download_dir; }
-        void SetPsxDownloadDir(const std::string& dir);
 
         bool IsValid() const { return is_valid; }
         const std::string& GetErrorMessage() const { return error_message; }
@@ -175,35 +171,34 @@ namespace romm::model {
         const std::string& GetDismissedUpdateVersion() const { return dismissed_update_version; }
         void SetDismissedUpdateVersion(const std::string& version) { dismissed_update_version = version; }
 
-        // ROM paths for different platforms
+        // Single configurable base directory. Games always install to
+        // <base>/roms/<system>/, so an override per platform is unnecessary.
+        const std::string& GetRomsBaseDir() const { return roms_base_dir; }
+        void SetRomsBaseDir(const std::string& dir);
         std::string GetRomPath(const std::string& platform) const;
-        void SetRomPath(const std::string& platform, const std::string& path);
 
-        // --- Platform visibility (Settings > Platforms) -------------------
-        // Purely a UI filter over the platform browser: nothing here touches
-        // ROM files, installed_index.json, download paths, covers or cache.
-        // Keyed by NormalizePlatformId(), so aliases of the same platform
-        // share one entry; accepts a raw RomM slug or a display name.
-        bool IsPlatformVisible(const std::string& slug) const;
-        void SetPlatformVisible(const std::string& slug, bool visible);
-        // Restores the shipped default-visible / default-hidden lists. Any
-        // platform outside the catalogue goes back to hidden.
-        void ResetPlatformVisibilityDefaults();
-        // Unhides everything currently known, catalogue or server-detected.
-        void ShowAllPlatforms();
-
-        // Records the platforms the server just returned. Ones seen for the
-        // first time take their catalogue default (unknown => hidden), which
-        // is what makes "hidden by default" stick without re-hiding a platform
-        // the user has since enabled. Returns true if anything changed, so the
-        // caller can Save() exactly once.
-        bool RegisterDetectedPlatforms(const std::vector<std::string>& slugs);
-
-        const std::set<std::string>& GetHiddenPlatformIds() const { return hidden_platforms; }
-        const std::set<std::string>& GetKnownPlatformIds() const { return known_platforms; }
+        // --- Tico sync paths --------------------------------------------
+        // Root directory of the Tico frontend on the SD card. Everything the
+        // sync feature writes lands under it, mirroring Tico's real folder
+        // layout: <base>/roms/<platform>/, <base>/saves/<platform>/ and
+        // <base>/assets/covers/<platform>/. Configurable in config.json
+        // ("tico_base_dir"), defaults to "sdmc:/tico/".
+        const std::string& GetTicoBaseDir() const { return tico_base_dir; }
+        void SetTicoBaseDir(const std::string& dir);
+        std::string GetTicoRomPath(const std::string& romm_slug) const;
+        std::string GetTicoSavePath(const std::string& romm_slug) const;
+        // Save states live one level up from saves, in Tico's states folder:
+        // <base>/states/<platform>/<game_base>.state1..9 (one file per slot).
+        std::string GetTicoStatePath(const std::string& romm_slug) const;
+        std::string GetTicoCoverPath(const std::string& romm_slug) const;
+        // One background image per game, mirroring Tico's cover layout:
+        // <base>/assets/backgrounds/<platform>/<game_base>.jpg. The base name
+        // is the ROM file name without extension (same stem the cover uses).
+        std::string GetTicoBackgroundPath(const std::string& romm_slug,
+                                          const std::string& game_base) const;
 
     private:
-        ConfigManager();
+        ConfigManager() = default;
 
         // Serializes the config.json write. UpdateManager records the installed
         // channel from its worker thread, which can otherwise interleave with a
@@ -212,7 +207,6 @@ namespace romm::model {
 
         std::string romm_host;
         std::string api_key;
-        std::string psx_download_dir = "sdmc:/roms/ps1/";
         bool is_valid = false;
         std::string error_message;
 
@@ -238,6 +232,13 @@ namespace romm::model {
         // existing update_manifest_url — confirm or correct via Settings.
         std::string audio_base_url = "https://romm-nx.aaaoz.fr/romm-nx/audio/";
 
+        // Root under which every platform's games live, one subfolder per
+        // system ("roms/" + slug). Always ends in '/'.
+        std::string roms_base_dir = "sdmc:/romm-nx/";
+
+        // Root of the Tico frontend. Always ends in '/'.
+        std::string tico_base_dir = "sdmc:/tico/";
+
         // Directory holding the per-channel subdirectories; always ends in '/'.
         std::string update_base_url = "https://romm-nx.aaaoz.fr/romm-nx/";
         std::string update_manifest_url_override;
@@ -246,15 +247,7 @@ namespace romm::model {
         bool check_updates_on_startup = true;
         std::string dismissed_update_version;
 
-        std::map<std::string, std::string> rom_paths;
         std::map<std::string, GridViewMode> platform_grid_view_mode;
-
-        // Canonical ids the user has hidden from the platform browser, and
-        // every canonical id romm-nx has ever seen. The second list is what
-        // lets a *newly* detected platform default to hidden without also
-        // re-hiding one the user deliberately enabled earlier.
-        std::set<std::string> hidden_platforms;
-        std::set<std::string> known_platforms;
     };
 
 }

@@ -25,7 +25,6 @@ namespace romm::ui {
         std::shared_ptr<StatusBar> status_bar;
 
         pu::ui::elm::TextBlock::Ref title_text;
-        pu::ui::elm::TextBlock::Ref hint_text;
 
     public:
         LibraryLayout(std::shared_ptr<romm::navigation::NavigationManager> nav);

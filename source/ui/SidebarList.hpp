@@ -38,6 +38,10 @@ namespace romm::ui {
         // Status cards ("Loading platforms...", "Failed to connect", ...) are
         // pre-rendered, so a language switch has to invalidate them too.
         uint64_t cached_i18n_generation = 0;
+        // Total number of marked games, or -1 as "unknown". Drives a texture
+        // rebuild whenever the bulk selection changes, so the cream
+        // highlighted rows stay in sync with the marks.
+        int cached_bulk_mark_count = -1;
         int sidebar_scroll_offset = 0;
         int visible_platform_count = 13;
 

@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <map>
+#include <set>
 
 namespace romm::model {
 
@@ -94,94 +95,49 @@ namespace romm::model {
             return table;
         }
 
-    }
+        // Canonical ids of every platform romm-nx ships knowledge of.
+        const std::set<std::string>& KnownPlatformIds() {
+            static const std::set<std::string> ids = {
+                "gb", "gbc", "gba", "nes", "snes", "n64", "nds", "3ds",
+                "psx", "ps2", "ps3", "ps4", "psp",
+                "arcade", "atari2600", "genesis", "saturn", "switch", "wii", "wiiu",
+            };
+            return ids;
+        }
 
-    std::string NormalizePlatformId(const std::string& value) {
-        // Strip before slugifying: Slugify() collapses "--" to "-", which would
-        // turn "ps4--1" into "ps4-1" and hide the suffix from this check.
-        const std::string slug = Slugify(StripIgdbDisambiguator(value));
-        if (slug.empty()) return slug;
+        std::string NormalizePlatformId(const std::string& value) {
+            // Strip before slugifying: Slugify() collapses "--" to "-", which would
+            // turn "ps4--1" into "ps4-1" and hide the suffix from this check.
+            const std::string slug = Slugify(StripIgdbDisambiguator(value));
+            if (slug.empty()) return slug;
 
-        const auto& table = AliasTable();
-        auto it = table.find(slug);
-        if (it != table.end()) return it->second;
+            const auto& table = AliasTable();
+            auto it = table.find(slug);
+            if (it != table.end()) return it->second;
 
-        // Unknown platform: keep the slugified form as its identity so it still
-        // stores, looks up and de-duplicates consistently.
-        return slug;
+            // Unknown platform: keep the slugified form as its identity so it still
+            // stores, looks up and de-duplicates consistently.
+            return slug;
+        }
+
     }
 
     std::string ResolvePlatformIdentity(const std::string& slug, const std::string& name) {
         const std::string from_slug = NormalizePlatformId(slug);
-        if (FindPlatformCatalogEntry(from_slug) != nullptr) {
+        if (KnownPlatformIds().count(from_slug) != 0) {
             return from_slug; // "ps4", "ps4--1", "genesis-slash-megadrive", ...
         }
 
         // Slug didn't resolve — try the display name. This is what rescues a
         // Folder alias whose folder name says nothing about the platform.
         const std::string from_name = NormalizePlatformId(name);
-        if (FindPlatformCatalogEntry(from_name) != nullptr) {
+        if (KnownPlatformIds().count(from_name) != 0) {
             return from_name;
         }
 
         // Genuinely unknown to romm-nx. Prefer the slug as its identity (stable
         // across a rename); fall back to the name only if there's no slug.
         return from_slug.empty() ? from_name : from_slug;
-    }
-
-    const std::vector<PlatformCatalogEntry>& GetPlatformCatalog() {
-        static const std::vector<PlatformCatalogEntry> catalog = {
-            // Shown by default
-            {"gb",        "Game Boy",             true},
-            {"gbc",       "Game Boy Color",       true},
-            {"gba",       "Game Boy Advance",     true},
-            {"nes",       "NES",                  true},
-            {"snes",      "SNES",                 true},
-            {"n64",       "Nintendo 64",          true},
-            {"nds",       "Nintendo DS",          true},
-            {"3ds",       "Nintendo 3DS",         true},
-            {"psx",       "PlayStation",          true},
-            {"ps2",       "PlayStation 2",        true},
-            {"psp",       "PlayStation Portable", true},
-            // Hidden by default
-            {"arcade",    "Arcade",               false},
-            {"atari2600", "Atari 2600",           false},
-            {"genesis",   "Genesis / Mega Drive", false},
-            {"ps3",       "PlayStation 3",        false},
-            {"ps4",       "PlayStation 4",        false},
-            {"saturn",    "Sega Saturn",          false},
-            {"switch",    "Nintendo Switch",      false},
-            {"wii",       "Nintendo Wii",         false},
-            {"wiiu",      "Nintendo Wii U",       false},
-        };
-        return catalog;
-    }
-
-    const PlatformCatalogEntry* FindPlatformCatalogEntry(const std::string& canonical_id) {
-        for (const auto& entry : GetPlatformCatalog()) {
-            if (entry.id == canonical_id) return &entry;
-        }
-        return nullptr;
-    }
-
-    bool IsPlatformVisibleByDefault(const std::string& canonical_id) {
-        const auto* entry = FindPlatformCatalogEntry(canonical_id);
-        return entry != nullptr && entry->visible_by_default;
-    }
-
-    std::vector<std::string> GetDefaultHiddenPlatformIds() {
-        std::vector<std::string> out;
-        for (const auto& entry : GetPlatformCatalog()) {
-            if (!entry.visible_by_default) out.push_back(entry.id);
-        }
-        return out;
-    }
-
-    std::string GetPlatformDisplayName(const std::string& canonical_id, const std::string& server_name) {
-        const auto* entry = FindPlatformCatalogEntry(canonical_id);
-        if (entry != nullptr) return entry->display_name;
-        if (!server_name.empty()) return server_name;
-        return canonical_id;
     }
 
 }

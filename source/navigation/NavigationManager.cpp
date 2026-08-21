@@ -1,15 +1,17 @@
 #include "NavigationManager.hpp"
 #include "../model/ConfigManager.hpp"
 #include "../model/DownloadManager.hpp"
+#include "../model/SyncManager.hpp"
+#include "../model/SaveManager.hpp"
+#include "../model/StateManager.hpp"
 #include "../ui/MainMenuLayout.hpp"
 #include "../ui/LibraryLayout.hpp"
 #include "../ui/GameGrid.hpp"
 #include "../model/UpdateManager.hpp"
 #include "../ui/DetailLayout.hpp"
 #include "../ui/SettingsLayout.hpp"
-#include "../ui/InstalledLayout.hpp"
-#include "../ui/QueueLayout.hpp"
-#include "../ui/FileBrowserLayout.hpp"
+#include "../ui/SaveDataLayout.hpp"
+#include "../ui/StateDataLayout.hpp"
 #include "../ui/LibraryMenuModal.hpp"
 #include "../ui/AlphabetBar.hpp"
 #include "../ui/MainApplication.hpp"
@@ -57,11 +59,9 @@ namespace romm::navigation {
     static std::string GetMenuEntryName(size_t idx) {
         switch (idx) {
             case 0: return "Games";
-            case 1: return "Installed";
-            case 2: return "Queue";
-            case 3: return "Saves";
-            case 4: return "File browser";
-            case 5: return "Settings";
+            case 1: return "Save Data";
+            case 2: return "States";
+            case 3: return "Settings";
             default: return "Unknown";
         }
     }
@@ -128,12 +128,13 @@ namespace romm::navigation {
     NavigationManager::NavigationManager(pu::ui::Application* app, std::shared_ptr<romm::model::DataModel> model)
         : app(app), model(model), current_screen(Screen::MainMenu), library_focus(LibraryFocus::Sidebar),
           selected_menu_idx(0), selected_platform_idx(0), loaded_platform_idx(0), selected_game_idx(0),
-          selected_letter_idx(0), detail_focus(DetailFocus::Tabs),
-          selected_detail_tab_idx(0), selected_detail_action_idx(0),
+          selected_letter_idx(0), detail_focus(DetailFocus::Cover),
+          selected_detail_action_idx(0),
           repeat_held_button(0),
           repeat_start_time(std::chrono::high_resolution_clock::now()),
           repeat_last_time(std::chrono::high_resolution_clock::now()),
-          main_menu_layout(nullptr), library_layout(nullptr), detail_layout(nullptr), settings_layout(nullptr) {}
+          main_menu_layout(nullptr), library_layout(nullptr), detail_layout(nullptr),
+          settings_layout(nullptr), save_data_layout(nullptr) {}
 
     void NavigationManager::Initialize() {
         // Instantiate layouts exactly once as required
@@ -141,10 +142,9 @@ namespace romm::navigation {
         library_layout = std::make_shared<romm::ui::LibraryLayout>(shared_from_this());
         detail_layout = std::make_shared<romm::ui::DetailLayout>(shared_from_this());
         settings_layout = std::make_shared<romm::ui::SettingsLayout>(shared_from_this());
-        installed_layout = std::make_shared<romm::ui::InstalledLayout>(shared_from_this());
-        queue_layout = std::make_shared<romm::ui::QueueLayout>(shared_from_this());
-        file_browser_layout = nullptr;
         fullscreen_image_layout = std::make_shared<romm::ui::FullscreenImageLayout>();
+        save_data_layout = std::make_shared<romm::ui::SaveDataLayout>(shared_from_this());
+        state_data_layout = std::make_shared<romm::ui::StateDataLayout>(shared_from_this());
 
         std::cout << "[NAV] [LAYOUT TRANSITION] Loading MainMenuLayout as default screen" << std::endl;
         app->LoadLayout(main_menu_layout);
@@ -162,12 +162,10 @@ namespace romm::navigation {
         } else if (current_screen == Screen::Settings && settings_layout) {
             settings_layout->OnSelectionUpdated();
             settings_layout->UpdateFooterHints(settings_focus);
-        } else if (current_screen == Screen::Installed && installed_layout) {
-            installed_layout->OnSelectionUpdated();
-        } else if (current_screen == Screen::Queue && queue_layout) {
-            queue_layout->OnSelectionUpdated();
-        } else if (current_screen == Screen::FileBrowser && file_browser_layout) {
-            file_browser_layout->OnSelectionUpdated();
+        } else if (current_screen == Screen::SaveData && save_data_layout) {
+            save_data_layout->OnSelectionUpdated();
+        } else if (current_screen == Screen::StateData && state_data_layout) {
+            state_data_layout->OnSelectionUpdated();
         }
     }
 
@@ -184,10 +182,6 @@ namespace romm::navigation {
         if (library_layout) library_layout->RefreshTranslations();
         if (detail_layout) detail_layout->RefreshTranslations();
         if (settings_layout) settings_layout->RefreshTranslations();
-        if (installed_layout) installed_layout->RefreshTranslations();
-        if (queue_layout) queue_layout->RefreshTranslations();
-        // Created lazily on first visit, so it may legitimately not exist yet.
-        if (file_browser_layout) file_browser_layout->RefreshTranslations();
         // FullscreenImageLayout renders its status line from tr() every frame.
 
         UpdateLayoutSelection();
@@ -210,10 +204,659 @@ namespace romm::navigation {
 
             // Force refresh on the active layouts
             if (detail_layout && detail_layout->GetCard()) detail_layout->GetCard()->ForceRefresh();
-            if (installed_layout) installed_layout->ForceRefresh();
 
             HideUninstallModal();
         }
+    }
+
+    void NavigationManager::HandleSyncModalInput(u64 keys_down) {
+        if (!sync_modal_active) return;
+
+        auto& sync = romm::model::SyncManager::Instance();
+
+        // Pre-flight options screen: the sync has not started yet.
+        if (sync_modal_mode == SyncModalMode::Options) {
+            // 0 = force ROM, 1 = force cover, 2 = cover as background,
+            // 3 = save direction, 4 = start.
+            static constexpr size_t kOptionRows = 5;
+            if (keys_down & HidNpadButton_B) {
+                sync_modal_active = false;
+                sync_option_idx = 0;
+            } else if (keys_down & HidNpadButton_Up) {
+                if (sync_option_idx > 0) sync_option_idx--;
+            } else if (keys_down & HidNpadButton_Down) {
+                if (sync_option_idx + 1 < kOptionRows) sync_option_idx++;
+            } else if ((keys_down & HidNpadButton_Left) || (keys_down & HidNpadButton_Right)) {
+                if (sync_option_idx == 0) {
+                    sync_opt_force_rom = !sync_opt_force_rom;
+                } else if (sync_option_idx == 1) {
+                    sync_opt_force_cover = !sync_opt_force_cover;
+                } else if (sync_option_idx == 2) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 3) {
+                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                }
+            } else if (keys_down & HidNpadButton_A) {
+                if (sync_option_idx == 4) {
+                    // Start the sync with the chosen options.
+                    romm::model::SyncOptions opts;
+                    opts.force_rom = sync_opt_force_rom;
+                    opts.force_cover = sync_opt_force_cover;
+                    opts.use_cover_as_background = sync_opt_background;
+                    opts.force_save_upload = (sync_opt_save_dir == 1);
+                    opts.force_save_download = (sync_opt_save_dir == 2);
+
+                    if (sync_bulk_pending) {
+                        sync.StartPlatformSync(sync_bulk_platform_slug, sync_bulk_platform_name,
+                                               sync_bulk_games, opts);
+                        sync_bulk_pending = false;
+                        // The batch is consumed: drop the marks so the grid
+                        // doesn't keep showing a stale selection afterwards.
+                        ClearBulkSelection();
+                        std::cout << "[NAV] [SYNC] Starting platform sync slug="
+                                  << sync_bulk_platform_slug
+                                  << " games=" << sync_bulk_games.size() << std::endl;
+                    } else {
+                        int rom_id = (detail_layout) ? detail_layout->ctx.rom_id : 0;
+                        const auto* detail = (model) ? model->GetCachedDetail(rom_id) : nullptr;
+                        if (detail) {
+                            sync.StartSync(*detail, detail_layout->ctx.platform_slug,
+                                           detail_layout->ctx.title, opts);
+                            std::cout << "[NAV] [SYNC] Starting sync for rom_id=" << rom_id
+                                      << " force_rom=" << opts.force_rom
+                                      << " force_cover=" << opts.force_cover
+                                      << " save_dir=" << sync_opt_save_dir << std::endl;
+                        } else {
+                            std::cerr << "[NAV] Sync start ignored: detail not loaded for rom "
+                                      << rom_id << std::endl;
+                        }
+                    }
+                    sync_modal_mode = SyncModalMode::Progress;
+                    sync_conflict_selected_idx = 0;
+                } else if (sync_option_idx == 0) {
+                    sync_opt_force_rom = !sync_opt_force_rom;
+                } else if (sync_option_idx == 1) {
+                    sync_opt_force_cover = !sync_opt_force_cover;
+                } else if (sync_option_idx == 2) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 3) {
+                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                }
+            }
+            return;
+        }
+
+        // Progress mode: conflict prompt first, then plain close.
+        const auto snap = sync.GetSnapshot();
+        if (snap.conflict.active) {
+            if (keys_down & HidNpadButton_Up) {
+                if (sync_conflict_selected_idx > 0) sync_conflict_selected_idx--;
+            } else if (keys_down & HidNpadButton_Down) {
+                if (sync_conflict_selected_idx + 1 < 3) sync_conflict_selected_idx++;
+            } else if (keys_down & HidNpadButton_A) {
+                if (sync_conflict_selected_idx == 0) {
+                    sync.ResolveConflict(true);   // local wins -> upload
+                } else if (sync_conflict_selected_idx == 1) {
+                    sync.ResolveConflict(false);  // server wins -> download
+                } else {
+                    sync.SkipConflict();
+                }
+                sync_conflict_selected_idx = 0;
+            } else if (keys_down & HidNpadButton_B) {
+                // Closing/cancelling the prompt skips this save.
+                sync.SkipConflict();
+                sync_conflict_selected_idx = 0;
+            }
+        } else {
+            if (keys_down & HidNpadButton_B) {
+                sync_modal_active = false;
+            }
+        }
+    }
+
+    void NavigationManager::OpenSaveData() {
+        current_screen = Screen::SaveData;
+        save_platform_idx = 0;
+        save_game_idx = 0;
+        save_detail_open = false;
+        save_list_focus = 0;
+        save_action_idx = 0;
+        save_detail_rom_id = 0;
+        save_detail_focus = SaveDetailFocus::Local;
+        save_detail_actions_origin = SaveDetailFocus::Local;
+        save_detail_server_sel = 0;
+        save_detail_action_idx = 0;
+
+        // Kick the first platform's refresh. If its ROMs aren't loaded yet,
+        // trigger the fetch too — the view re-runs the refresh once they land.
+        SelectSavePlatform();
+
+        if (save_data_layout) {
+            app->LoadLayout(save_data_layout);
+        }
+    }
+
+    void NavigationManager::OpenStateData() {
+        current_screen = Screen::StateData;
+        state_platform_idx = 0;
+        state_game_idx = 0;
+        state_detail_open = false;
+        state_list_focus = 0;
+        state_action_idx = 0;
+        state_detail_rom_id = 0;
+        state_detail_focus = SaveDetailFocus::Local;
+        state_detail_actions_origin = SaveDetailFocus::Local;
+        state_detail_server_sel = 0;
+        state_detail_action_idx = 0;
+
+        // Kick the first platform's refresh. If its ROMs aren't loaded yet,
+        // trigger the fetch too — the view re-runs the refresh once they land.
+        SelectStatePlatform();
+
+        if (state_data_layout) {
+            app->LoadLayout(state_data_layout);
+        }
+    }
+
+    // Switches the State Data platform cursor: fetches ROMs on demand and
+    // re-targets the StateManager refresh at the newly selected platform.
+    void NavigationManager::SelectStatePlatform() {
+        const auto& platforms = model->GetPlatforms();
+        if (state_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[state_platform_idx];
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+        }
+        romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [STATES] Platform -> " << plat.name << std::endl;
+    }
+
+    void NavigationManager::HandleSaveDataInput(u64 keys_down, u64 keys_effective) {
+        // Re-scan the local side once a transfer started from this screen
+        // finishes (fingerprints and verdicts changed with it).
+        if (save_rescan_pending && !romm::model::SyncManager::Instance().IsRunning()) {
+            save_rescan_pending = false;
+            romm::model::SaveManager::Instance().RescanLocal();
+        }
+
+        const auto& platforms = model->GetPlatforms();
+        if (platforms.empty()) {
+            if (keys_down & HidNpadButton_B) {
+                current_screen = Screen::MainMenu;
+                app->LoadLayout(main_menu_layout);
+            }
+            return;
+        }
+
+        const size_t plat_count = platforms.size();
+        const auto& plat = platforms[save_platform_idx < plat_count ? save_platform_idx : 0];
+
+        // ---- Per-game comparison view ------------------------------------
+        if (save_detail_open) {
+            if (keys_down & HidNpadButton_B) {
+                save_detail_open = false;
+                save_detail_rom_id = 0;
+                std::cout << "[NAV] [SAVES] Closed per-game view" << std::endl;
+                return;
+            }
+            // ZR re-checks the whole platform from the detail view too.
+            if (keys_down & HidNpadButton_ZR) {
+                romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
+                return;
+            }
+
+            const auto snap = romm::model::SaveManager::Instance().GetSnapshot();
+            const romm::model::SaveGameState* game = nullptr;
+            for (const auto& g : snap.games) {
+                if (g.rom_id == save_detail_rom_id) { game = &g; break; }
+            }
+            const size_t save_count = game ? game->server_saves.size() : 0;
+
+            if (save_detail_focus == SaveDetailFocus::Server) {
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    if (save_detail_server_sel > 0) save_detail_server_sel--;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    if (save_detail_server_sel + 1 < save_count) {
+                        save_detail_server_sel++;
+                    } else {
+                        // Bottom of the version list: next Down drops to the
+                        // action buttons, mirroring the level-1 list -> bar.
+                        save_detail_focus = SaveDetailFocus::Actions;
+                        save_detail_action_idx = 0;
+                        save_detail_actions_origin = SaveDetailFocus::Server;
+                    }
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    save_detail_focus = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    save_detail_focus = SaveDetailFocus::Actions;
+                    save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Server;
+                } else if (keys_down & HidNpadButton_A) {
+                    // Download the selected server version directly. The
+                    // displayed list is newest-first; the server's order is
+                    // not guaranteed, so resolve through the same sort.
+                    if (game && save_detail_server_sel < game->server_saves.size()) {
+                        std::vector<romm::model::SaveEntry> sorted = game->server_saves;
+                        std::sort(sorted.begin(), sorted.end(),
+                                  [](const romm::model::SaveEntry& a, const romm::model::SaveEntry& b) {
+                                      return a.updated_at > b.updated_at;
+                                  });
+                        if (save_detail_server_sel < sorted.size()) {
+                            const auto& save = sorted[save_detail_server_sel];
+                            std::cout << "[NAV] [SAVES] Downloading server save "
+                                      << save.file_name << " for rom " << save_detail_rom_id << std::endl;
+                            auto& sync = romm::model::SyncManager::Instance();
+                            sync.StartSpecificSaveDownload(save_detail_rom_id, plat.slug, game->title, save);
+                            sync_modal_active = true;
+                            sync_modal_mode = SyncModalMode::Progress;
+                            save_rescan_pending = true;
+                        }
+                    }
+                }
+            } else if (save_detail_focus == SaveDetailFocus::Actions) {
+                // The buttons sit below the cards: Up returns to whichever
+                // card dropped the focus down here.
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    save_detail_focus = save_detail_actions_origin;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    if (save_detail_action_idx > 0) save_detail_action_idx--;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    if (save_detail_action_idx + 1 < 3) save_detail_action_idx++;
+                } else if (keys_down & HidNpadButton_A) {
+                    if (game) {
+                        romm::model::SyncOptions opts;
+                        opts.saves_only = true;
+                        if (save_detail_action_idx == 1) opts.force_save_upload = true;
+                        else if (save_detail_action_idx == 2) opts.force_save_download = true;
+
+                        romm::model::GameDetail minimal;
+                        minimal.rom_id = game->rom_id;
+                        auto& sync = romm::model::SyncManager::Instance();
+                        sync.StartSync(minimal, plat.slug, game->title, opts);
+                        sync_modal_active = true;
+                        sync_modal_mode = SyncModalMode::Progress;
+                        save_rescan_pending = true;
+                        std::cout << "[NAV] [SAVES] Single-game action " << save_detail_action_idx
+                                  << " for rom " << game->rom_id << std::endl;
+                    }
+                }
+            } else { // SaveDetailFocus::Local
+                if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    save_detail_focus = SaveDetailFocus::Server;
+                    save_detail_server_sel = 0;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    // The action buttons are directly below the cards.
+                    save_detail_focus = SaveDetailFocus::Actions;
+                    save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    save_detail_focus = SaveDetailFocus::Actions;
+                    save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
+                }
+            }
+            return;
+        }
+
+        // ---- Game list ----------------------------------------------------
+        if (keys_down & HidNpadButton_B) {
+            current_screen = Screen::MainMenu;
+            app->LoadLayout(main_menu_layout);
+            std::cout << "[NAV] [B PRESS] Save Data -> Main Menu" << std::endl;
+            return;
+        }
+
+        // ZR re-checks the server for the whole platform, from any zone.
+        if (keys_down & HidNpadButton_ZR) {
+            romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
+            return;
+        }
+
+        const size_t game_count = plat.games.size();
+
+        // Three focus zones, mirroring the Games screen's flow: the platform
+        // strip first (Left/Right enters the list), then the game list, then
+        // the batch action bar (Down reaches it from anywhere in the list).
+        // 0 = platform list, 1 = game list, 2 = action bar.
+        if (save_list_focus == 0) {
+            // Platform list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (save_platform_idx > 0) {
+                    save_platform_idx--;
+                    save_game_idx = 0;
+                    SelectSavePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (save_platform_idx + 1 < plat_count) {
+                    save_platform_idx++;
+                    save_game_idx = 0;
+                    SelectSavePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                save_list_focus = 1;
+                std::cout << "[NAV] [SAVES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                save_list_focus = 1;
+            }
+        } else if (save_list_focus == 1) {
+            // Game list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (save_game_idx > 0) save_game_idx--;
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (save_game_idx + 1 < game_count) {
+                    save_game_idx++;
+                } else {
+                    // Bottom of the list: next Down drops to the action bar.
+                    save_list_focus = 2;
+                    save_action_idx = 0;
+                    std::cout << "[NAV] [SAVES] Focus -> action bar" << std::endl;
+                }
+            } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                save_list_focus = 0;
+                std::cout << "[NAV] [SAVES] Focus -> platform list" << std::endl;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                // Right always jumps to the bar, whatever the scroll position.
+                save_list_focus = 2;
+                save_action_idx = 0;
+                std::cout << "[NAV] [SAVES] Focus -> action bar" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count > 0 && save_game_idx < game_count) {
+                    save_detail_open = true;
+                    save_detail_rom_id = plat.games[save_game_idx].id;
+                    save_detail_focus = SaveDetailFocus::Local;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
+                    save_detail_server_sel = 0;
+                    save_detail_action_idx = 0;
+                    std::cout << "[NAV] [SAVES] Opened per-game view rom="
+                              << save_detail_rom_id << std::endl;
+                }
+            }
+        } else {
+            // Batch action bar.
+            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                if (save_action_idx > 0) save_action_idx--;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                if (save_action_idx + 1 < 3) save_action_idx++;
+            } else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                save_list_focus = 1;
+                std::cout << "[NAV] [SAVES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count == 0) return;
+                std::vector<romm::model::SyncGameEntry> games;
+                games.reserve(game_count);
+                for (const auto& g : plat.games) {
+                    romm::model::SyncGameEntry e;
+                    e.rom_id = g.id;
+                    e.title = g.title;
+                    e.platform_slug = plat.slug;
+                    games.push_back(e);
+                }
+
+                romm::model::SyncOptions opts;
+                opts.saves_only = true;
+                if (save_action_idx == 1) opts.force_save_upload = true;
+                else if (save_action_idx == 2) opts.force_save_download = true;
+
+                auto& sync = romm::model::SyncManager::Instance();
+                sync.StartPlatformSync(plat.slug, plat.name, games, opts);
+                sync_modal_active = true;
+                sync_modal_mode = SyncModalMode::Progress;
+                save_rescan_pending = true;
+                std::cout << "[NAV] [SAVES] Batch action " << save_action_idx
+                          << " on " << plat.slug << " games=" << games.size() << std::endl;
+            }
+        }
+    }
+
+    void NavigationManager::HandleStateDataInput(u64 keys_down, u64 keys_effective) {
+        // Re-scan the local side once a transfer started from this screen
+        // finishes (slot fingerprints and verdicts changed with it).
+        if (state_rescan_pending && !romm::model::SyncManager::Instance().IsRunning()) {
+            state_rescan_pending = false;
+            romm::model::StateManager::Instance().RescanLocal();
+        }
+
+        const auto& platforms = model->GetPlatforms();
+        if (platforms.empty()) {
+            if (keys_down & HidNpadButton_B) {
+                current_screen = Screen::MainMenu;
+                app->LoadLayout(main_menu_layout);
+            }
+            return;
+        }
+
+        const size_t plat_count = platforms.size();
+        const auto& plat = platforms[state_platform_idx < plat_count ? state_platform_idx : 0];
+
+        // ---- Per-game comparison view ------------------------------------
+        if (state_detail_open) {
+            if (keys_down & HidNpadButton_B) {
+                state_detail_open = false;
+                state_detail_rom_id = 0;
+                std::cout << "[NAV] [STATES] Closed per-game view" << std::endl;
+                return;
+            }
+            // ZR re-checks the whole platform from the detail view too.
+            if (keys_down & HidNpadButton_ZR) {
+                romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+                return;
+            }
+
+            const auto snap = romm::model::StateManager::Instance().GetSnapshot();
+            const romm::model::StateGameState* game = nullptr;
+            for (const auto& g : snap.games) {
+                if (g.rom_id == state_detail_rom_id) { game = &g; break; }
+            }
+            const size_t state_count = game ? game->server_states.size() : 0;
+
+            if (state_detail_focus == SaveDetailFocus::Server) {
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    if (state_detail_server_sel > 0) state_detail_server_sel--;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    if (state_detail_server_sel + 1 < state_count) {
+                        state_detail_server_sel++;
+                    } else {
+                        // Bottom of the version list: next Down drops to the
+                        // action buttons, mirroring the level-1 list -> bar.
+                        state_detail_focus = SaveDetailFocus::Actions;
+                        state_detail_action_idx = 0;
+                        state_detail_actions_origin = SaveDetailFocus::Server;
+                    }
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    state_detail_focus = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Server;
+                } else if (keys_down & HidNpadButton_A) {
+                    // Download the selected server state directly. The
+                    // displayed list is newest-first; the server's order is
+                    // not guaranteed, so resolve through the same sort.
+                    if (game && state_detail_server_sel < game->server_states.size()) {
+                        std::vector<romm::model::SaveEntry> sorted = game->server_states;
+                        std::sort(sorted.begin(), sorted.end(),
+                                  [](const romm::model::SaveEntry& a, const romm::model::SaveEntry& b) {
+                                      return a.updated_at > b.updated_at;
+                                  });
+                        if (state_detail_server_sel < sorted.size()) {
+                            const auto& state = sorted[state_detail_server_sel];
+                            std::cout << "[NAV] [STATES] Downloading server state "
+                                      << state.file_name << " for rom " << state_detail_rom_id << std::endl;
+                            auto& sync = romm::model::SyncManager::Instance();
+                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state);
+                            sync_modal_active = true;
+                            sync_modal_mode = SyncModalMode::Progress;
+                            state_rescan_pending = true;
+                        }
+                    }
+                }
+            } else if (state_detail_focus == SaveDetailFocus::Actions) {
+                // The buttons sit below the cards: Up returns to whichever
+                // card dropped the focus down here.
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    state_detail_focus = state_detail_actions_origin;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    if (state_detail_action_idx > 0) state_detail_action_idx--;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    if (state_detail_action_idx + 1 < 3) state_detail_action_idx++;
+                } else if (keys_down & HidNpadButton_A) {
+                    if (game) {
+                        romm::model::SyncOptions opts;
+                        opts.states_only = true;
+                        if (state_detail_action_idx == 1) opts.force_state_upload = true;
+                        else if (state_detail_action_idx == 2) opts.force_state_download = true;
+
+                        romm::model::GameDetail minimal;
+                        minimal.rom_id = game->rom_id;
+                        auto& sync = romm::model::SyncManager::Instance();
+                        sync.StartSync(minimal, plat.slug, game->title, opts);
+                        sync_modal_active = true;
+                        sync_modal_mode = SyncModalMode::Progress;
+                        state_rescan_pending = true;
+                        std::cout << "[NAV] [STATES] Single-game action " << state_detail_action_idx
+                                  << " for rom " << game->rom_id << std::endl;
+                    }
+                }
+            } else { // SaveDetailFocus::Local
+                if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    state_detail_focus = SaveDetailFocus::Server;
+                    state_detail_server_sel = 0;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    // The action buttons are directly below the cards.
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                }
+            }
+            return;
+        }
+
+        // ---- Game list ----------------------------------------------------
+        if (keys_down & HidNpadButton_B) {
+            current_screen = Screen::MainMenu;
+            app->LoadLayout(main_menu_layout);
+            std::cout << "[NAV] [B PRESS] State Data -> Main Menu" << std::endl;
+            return;
+        }
+
+        // ZR re-checks the server for the whole platform, from any zone.
+        if (keys_down & HidNpadButton_ZR) {
+            romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+            return;
+        }
+
+        const size_t game_count = plat.games.size();
+
+        // Three focus zones, mirroring the Save Data screen: the platform
+        // strip first (Left/Right enters the list), then the game list, then
+        // the batch action bar (Down reaches it from anywhere in the list).
+        if (state_list_focus == 0) {
+            // Platform list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (state_platform_idx > 0) {
+                    state_platform_idx--;
+                    state_game_idx = 0;
+                    SelectStatePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (state_platform_idx + 1 < plat_count) {
+                    state_platform_idx++;
+                    state_game_idx = 0;
+                    SelectStatePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                state_list_focus = 1;
+                std::cout << "[NAV] [STATES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                state_list_focus = 1;
+            }
+        } else if (state_list_focus == 1) {
+            // Game list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (state_game_idx > 0) state_game_idx--;
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (state_game_idx + 1 < game_count) {
+                    state_game_idx++;
+                } else {
+                    // Bottom of the list: next Down drops to the action bar.
+                    state_list_focus = 2;
+                    state_action_idx = 0;
+                    std::cout << "[NAV] [STATES] Focus -> action bar" << std::endl;
+                }
+            } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                state_list_focus = 0;
+                std::cout << "[NAV] [STATES] Focus -> platform list" << std::endl;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                // Right always jumps to the bar, whatever the scroll position.
+                state_list_focus = 2;
+                state_action_idx = 0;
+                std::cout << "[NAV] [STATES] Focus -> action bar" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count > 0 && state_game_idx < game_count) {
+                    state_detail_open = true;
+                    state_detail_rom_id = plat.games[state_game_idx].id;
+                    state_detail_focus = SaveDetailFocus::Local;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                    state_detail_server_sel = 0;
+                    state_detail_action_idx = 0;
+                    std::cout << "[NAV] [STATES] Opened per-game view rom="
+                              << state_detail_rom_id << std::endl;
+                }
+            }
+        } else {
+            // Batch action bar.
+            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                if (state_action_idx > 0) state_action_idx--;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                if (state_action_idx + 1 < 3) state_action_idx++;
+            } else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                state_list_focus = 1;
+                std::cout << "[NAV] [STATES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count == 0) return;
+                std::vector<romm::model::SyncGameEntry> games;
+                games.reserve(game_count);
+                for (const auto& g : plat.games) {
+                    romm::model::SyncGameEntry e;
+                    e.rom_id = g.id;
+                    e.title = g.title;
+                    e.platform_slug = plat.slug;
+                    games.push_back(e);
+                }
+
+                romm::model::SyncOptions opts;
+                opts.states_only = true;
+                if (state_action_idx == 1) opts.force_state_upload = true;
+                else if (state_action_idx == 2) opts.force_state_download = true;
+
+                auto& sync = romm::model::SyncManager::Instance();
+                sync.StartPlatformSync(plat.slug, plat.name, games, opts);
+                sync_modal_active = true;
+                sync_modal_mode = SyncModalMode::Progress;
+                state_rescan_pending = true;
+                std::cout << "[NAV] [STATES] Batch action " << state_action_idx
+                          << " on " << plat.slug << " games=" << games.size() << std::endl;
+            }
+        }
+    }
+
+    // Switches the Save Data platform cursor: fetches ROMs on demand and
+    // re-targets the SaveManager refresh at the newly selected platform.
+    void NavigationManager::SelectSavePlatform() {
+        const auto& platforms = model->GetPlatforms();
+        if (save_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[save_platform_idx];
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+        }
+        romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [SAVES] Platform -> " << plat.name << std::endl;
     }
 
     void NavigationManager::HandleLibraryMenuInput(u64 keys_down) {
@@ -269,6 +912,104 @@ namespace romm::navigation {
         }
     }
 
+    void NavigationManager::PreviewPlatform(size_t platform_idx) {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[platform_idx];
+
+        const bool platform_changed = (loaded_platform_idx != platform_idx);
+        loaded_platform_idx = platform_idx;
+        if (platform_changed) {
+            selected_game_idx = 0;
+            selected_letter_idx = 0;
+            ClearSearch();
+            // Bulk marks deliberately survive hovering across platforms: a
+            // selection made on one platform stays visible (and downloadable
+            // with ZR) no matter where the cursor moves.
+        }
+
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+            std::cout << "[NAV] [PREVIEW] Loading " << plat.name << std::endl;
+        } else {
+            std::cout << "[NAV] [PREVIEW] " << plat.name << " (cached, "
+                      << plat.games.size() << " games)" << std::endl;
+        }
+    }
+
+    void NavigationManager::MarkSelectedPlatform() {
+        if (!model) return;
+        const auto& platforms = model->GetPlatforms();
+        if (selected_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[selected_platform_idx];
+
+        if (plat.games.empty()) {
+            // ROMs not fetched yet: load the platform and auto-mark every
+            // game when the fetch lands (see ConsumePendingMarkPlatform).
+            pending_mark_platform = true;
+            pending_mark_platform_id = plat.id;
+            loaded_platform_idx = selected_platform_idx;
+            selected_game_idx = 0;
+            selected_letter_idx = 0;
+            ClearSearch();
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+            std::cout << "[NAV] [X] Marking platform (auto-mark on load): " << plat.name << std::endl;
+            return;
+        }
+
+        // Toggle all-or-nothing for the whole collection.
+        bool all_marked = true;
+        for (const auto& g : plat.games) {
+            if (!IsBulkSelected(g.id)) {
+                all_marked = false;
+                break;
+            }
+        }
+        for (const auto& g : plat.games) {
+            if (all_marked) {
+                bulk_selection.erase(g.id);
+            } else {
+                bulk_selection.insert(g.id);
+            }
+        }
+        loaded_platform_idx = selected_platform_idx;
+        std::cout << "[NAV] [X] " << (all_marked ? "Unmarked" : "Marked") << " all "
+                  << plat.games.size() << " games of " << plat.name << std::endl;
+    }
+
+    bool NavigationManager::ConsumePendingMarkPlatform(const std::string& platform_id,
+                                                       const std::vector<romm::model::Game>& games) {
+        if (!pending_mark_platform || pending_mark_platform_id != platform_id) return false;
+        pending_mark_platform = false;
+        pending_mark_platform_id.clear();
+        for (const auto& g : games) {
+            bulk_selection.insert(g.id);
+        }
+        std::cout << "[NAV] [X] Auto-marked " << games.size()
+                  << " games of platform " << platform_id << std::endl;
+        return true;
+    }
+
+    void NavigationManager::OpenBulkSyncOptions(const std::string& platform_slug,
+                                            const std::string& platform_name,
+                                            const std::vector<romm::model::SyncGameEntry>& games) {
+        sync_bulk_platform_slug = platform_slug;
+        sync_bulk_platform_name = platform_name;
+        sync_bulk_games = games;
+        sync_bulk_pending = true;
+        sync_modal_active = true;
+        sync_modal_mode = romm::navigation::SyncModalMode::Options;
+        sync_option_idx = 0;
+        sync_opt_force_rom = false;
+        sync_opt_force_cover = false;
+        sync_opt_background = false;
+        sync_opt_save_dir = 0;
+        sync_conflict_selected_idx = 0;
+    }
+
     void NavigationManager::HandleUpdateModalInput(u64 keys_down) {
         if (!update_modal_active) return;
 
@@ -289,7 +1030,7 @@ namespace romm::navigation {
             // changelog/confirm UI there instead of duplicating it here.
             update_modal_active = false;
             current_screen = Screen::Settings;
-            selected_settings_category_idx = 6; // Updates
+            selected_settings_category_idx = 5; // Updates
             settings_focus = romm::ui::SettingsFocusArea::OptionList;
             // Land on the install row, not row 0 — row 0 cycles the update
             // channel, and the popup's A button means "take me to this
@@ -308,6 +1049,9 @@ namespace romm::navigation {
 
     void NavigationManager::ApplyPlatformVisibilityChange() {
         if (!model) return;
+
+        pending_mark_platform = false;
+        pending_mark_platform_id.clear();
 
         // Anchor on platform ids, not indices: the filter reorders the list, so
         // an index that was valid a moment ago can point at a different
@@ -400,6 +1144,11 @@ namespace romm::navigation {
             return;
         }
 
+        if (sync_modal_active) {
+            HandleSyncModalInput(keys_down);
+            return;
+        }
+
         if (library_menu_active) {
             HandleLibraryMenuInput(keys_down);
             return;
@@ -451,56 +1200,31 @@ namespace romm::navigation {
         }
 
         if (keys_effective == 0) {
-            if (current_screen == Screen::Detail && detail_layout) {
-                // Background updates not strictly necessary since UI polls snapshots on render, but harmless to call a function if needed.
-            } else if (current_screen == Screen::Installed && installed_layout) {
-                installed_layout->OnSelectionUpdated(); // Keep dynamic lists refreshed
-            } else if (current_screen == Screen::Queue && queue_layout) {
-                queue_layout->OnSelectionUpdated(); // Keep dynamic lists refreshed
-            }
-            return; // Nothing to process
+            // Nothing to process — screens poll their own state on render.
+            return;
         }
 
         bool state_changed = false;
 
         if (current_screen == Screen::MainMenu) {
             size_t old_idx = selected_menu_idx;
-            // Main Menu grid D-pad/Stick Navigation (6 items: Row 1: 0,1,2,3; Row 2: 4,5)
-            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                if (selected_menu_idx == 1 || selected_menu_idx == 2 || selected_menu_idx == 3) {
-                    selected_menu_idx--;
-                    state_changed = true;
-                } else if (selected_menu_idx == 5) {
-                    selected_menu_idx = 4;
-                    state_changed = true;
-                }
-            }
-            else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                if (selected_menu_idx == 0 || selected_menu_idx == 1 || selected_menu_idx == 2) {
+            // Main Menu navigation: four cards — 0 = Games, 1 = Save Data,
+            // 2 = States, 3 = Settings.
+            if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                if (selected_menu_idx < 3) {
                     selected_menu_idx++;
                     state_changed = true;
-                } else if (selected_menu_idx == 4) {
-                    selected_menu_idx = 5;
+                }
+            }
+            else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                if (selected_menu_idx > 0) {
+                    selected_menu_idx--;
                     state_changed = true;
                 }
             }
-            else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                if (selected_menu_idx == 0 || selected_menu_idx == 1) {
-                    selected_menu_idx = 4; // Select File browser
-                    state_changed = true;
-                } else if (selected_menu_idx == 2 || selected_menu_idx == 3) {
-                    selected_menu_idx = 5; // Select Settings
-                    state_changed = true;
-                }
-            }
-            else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
-                if (selected_menu_idx == 4) {
-                    selected_menu_idx = 0; // Go up to Games (or 1)
-                    state_changed = true;
-                } else if (selected_menu_idx == 5) {
-                    selected_menu_idx = 2; // Go up to Queue (or 3)
-                    state_changed = true;
-                }
+            else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown) ||
+                     (keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                // Single row — nothing to move to vertically.
             }
             // Select item (A) - single press only
             else if (keys_down & HidNpadButton_A) {
@@ -512,20 +1236,18 @@ namespace romm::navigation {
                     library_focus = LibraryFocus::Sidebar; // Reset focus to sidebar
                     state_changed = true;
                     app->LoadLayout(library_layout);
+                    // Sidebar hover preview shows the first platform right away.
+                    PreviewPlatform(0);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Library Screen" << std::endl;
-                } else if (selected_menu_idx == 1) { // Installed
-                    current_screen = Screen::Installed;
+                } else if (selected_menu_idx == 1) { // Save Data
+                    OpenSaveData();
                     state_changed = true;
-                    if (installed_layout) installed_layout->ForceRefresh();
-                    app->LoadLayout(installed_layout);
-                    std::cout << "[NAV] Opening Installed layout" << std::endl;
-                } else if (selected_menu_idx == 2) { // Queue
-                    current_screen = Screen::Queue;
+                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Save Data Screen" << std::endl;
+                } else if (selected_menu_idx == 2) { // States
+                    OpenStateData();
                     state_changed = true;
-                    if (queue_layout) queue_layout->ForceRefresh();
-                    app->LoadLayout(queue_layout);
-                    std::cout << "[NAV] Opening Queue layout" << std::endl;
-                } else if (selected_menu_idx == 5) { // Settings
+                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> State Data Screen" << std::endl;
+                } else { // Settings
                     current_screen = Screen::Settings;
                     selected_settings_category_idx = 0;
                     selected_settings_option_idx = 0;
@@ -536,17 +1258,6 @@ namespace romm::navigation {
                     }
                     app->LoadLayout(settings_layout);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Settings Screen" << std::endl;
-                } else if (selected_menu_idx == 4) { // File browser
-                    current_screen = Screen::FileBrowser;
-                    state_changed = true;
-                    if (!file_browser_layout) {
-                        file_browser_layout = std::make_shared<romm::ui::FileBrowserLayout>(shared_from_this());
-                    }
-                    if (file_browser_layout) file_browser_layout->ForceRefresh();
-                    app->LoadLayout(file_browser_layout);
-                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> File Browser Screen" << std::endl;
-                } else {
-                    std::cout << "[LOG] Not implemented yet" << std::endl;
                 }
             }
 
@@ -587,27 +1298,41 @@ namespace romm::navigation {
             // selection. Only meaningful once a game is actually highlighted,
             // so it's ignored while the sidebar or alphabet bar has focus.
             if (keys_down & HidNpadButton_X) {
-                const bool on_a_game = (library_focus == LibraryFocus::Grid ||
-                                        library_focus == LibraryFocus::Panel);
-                if (on_a_game && selected_game_idx < filtered_count) {
+                if (library_focus == LibraryFocus::Sidebar) {
+                    // X on the sidebar marks the whole platform under the
+                    // cursor (loading it first if needed) — not just one game.
+                    MarkSelectedPlatform();
+                    state_changed = true;
+                } else if ((library_focus == LibraryFocus::Grid || library_focus == LibraryFocus::Panel) &&
+                           selected_game_idx < filtered_count) {
                     ToggleBulkSelection(current_platform.games[filtered_indices[selected_game_idx]].id);
                     state_changed = true;
                 }
             }
-            // ZR queues every selected game. Chosen over A-with-modifier because
-            // it can't be hit by accident while browsing.
+            // ZR opens the sync pre-flight for every selected game (ROM + saves +
+            // cover to the Tico folders), so batch options like "cover as
+            // platform background" can be toggled before anything runs.
+            // Marks survive moving across platforms, so the batch is collected
+            // from every platform, each game carrying its own platform slug.
+            // Chosen over A-with-modifier because it can't be hit by accident
+            // while browsing.
             else if (keys_down & HidNpadButton_ZR) {
                 if (GetBulkSelectionCount() > 0) {
-                    auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                    const std::string slug = romm::model::NormalizePlatformSlug(current_platform.slug);
-                    for (const auto& game : current_platform.games) {
-                        if (IsBulkSelected(game.id)) {
-                            main_app->EnqueueBulkDownload(game.id, slug, game.title);
+                    std::vector<romm::model::SyncGameEntry> marked;
+                    for (const auto& plat : model->GetPlatforms()) {
+                        for (const auto& game : plat.games) {
+                            if (IsBulkSelected(game.id)) {
+                                romm::model::SyncGameEntry e;
+                                e.rom_id = game.id;
+                                e.title = game.title;
+                                e.platform_slug = plat.slug;
+                                marked.push_back(e);
+                            }
                         }
                     }
-                    std::cout << "[NAV] [ZR] Bulk download queued for "
-                              << GetBulkSelectionCount() << " games" << std::endl;
-                    ClearBulkSelection();
+                    OpenBulkSyncOptions(current_platform.slug, current_platform.name, marked);
+                    std::cout << "[NAV] [ZR] Sync options opened for " << marked.size()
+                              << " marked games (" << current_platform.name << ")" << std::endl;
                     state_changed = true;
                 }
             }
@@ -624,6 +1349,7 @@ namespace romm::navigation {
                 if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
                     if (selected_platform_idx > 0) {
                         selected_platform_idx--;
+                        PreviewPlatform(selected_platform_idx);
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
                     }
@@ -631,25 +1357,36 @@ namespace romm::navigation {
                 else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
                     if (selected_platform_idx + 1 < platforms.size()) {
                         selected_platform_idx++;
+                        PreviewPlatform(selected_platform_idx);
                         state_changed = true;
                         std::cout << "[PERF] Platform focus changed: " << platforms.at(selected_platform_idx).name << std::endl;
                     }
                 }
-                // Sidebar Enter (A) -> load selected platform ROMs - single press only
+                // Sidebar Enter (A) -> load selected platform ROMs.
                 else if (keys_down & HidNpadButton_A) {
+                    // Marks (and search/filter state) only reset when
+                    // actually switching platforms — except the bulk marks,
+                    // which deliberately survive platform switches so a
+                    // selection can be downloaded from anywhere.
+                    const bool platform_changed = (loaded_platform_idx != selected_platform_idx);
                     loaded_platform_idx = selected_platform_idx;
-                    selected_game_idx = 0;
-                    selected_letter_idx = 0;
-                    // The query was scoped to the platform being left; carrying
-                    // it over would silently hide most of the new one. Same for
-                    // the bulk selection — invisible ids from another platform.
-                    ClearSearch();
-                    ClearBulkSelection();
+                    if (platform_changed) {
+                        selected_game_idx = 0;
+                        selected_letter_idx = 0;
+                        // The query was scoped to the platform being left;
+                        // carrying it over would silently hide most of the
+                        // new one.
+                        ClearSearch();
+                    }
                     std::cout << "[PERF] Platform selected: " << platforms.at(selected_platform_idx).name << std::endl;
                     std::cout << "[LIBRARY] Platform changed to " << platforms.at(selected_platform_idx).name << "/" << platforms.at(selected_platform_idx).slug << std::endl;
 
-                    auto main_app = static_cast<romm::ui::MainApplication*>(app);
-                    main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
+                    // The hover preview may have loaded it already; only
+                    // fetch when the collection isn't cached yet.
+                    if (platforms.at(selected_platform_idx).games.empty()) {
+                        auto main_app = static_cast<romm::ui::MainApplication*>(app);
+                        main_app->TriggerFetchRoms(std::stoi(platforms.at(selected_platform_idx).id));
+                    }
 
                     if (ShowAlphabetFilter()) {
                         library_focus = LibraryFocus::Alphabet;
@@ -786,8 +1523,7 @@ namespace romm::navigation {
                     }
                     else if (selected_game_idx < filtered_count) {
                         current_screen = Screen::Detail;
-                        detail_focus = DetailFocus::Tabs;
-                        selected_detail_tab_idx = 0;
+                        detail_focus = DetailFocus::Cover;
                         selected_detail_action_idx = 0;
                         state_changed = true;
                         
@@ -946,12 +1682,19 @@ namespace romm::navigation {
             }
         }
         else if (current_screen == Screen::Detail) {
-            // Scroll description logic (R-Stick or ZL/ZR)
+            // Scroll description logic (R-Stick up/down or ZL/ZR)
             if ((keys_effective & HidNpadButton_StickRDown) || (keys_effective & HidNpadButton_ZR)) {
                 if (detail_layout) detail_layout->ScrollDescription(1);
             }
             else if ((keys_effective & HidNpadButton_StickRUp) || (keys_effective & HidNpadButton_ZL)) {
                 if (detail_layout) detail_layout->ScrollDescription(-1);
+            }
+            // R/L switches the card image between the cover and the game
+            // screenshot (miximage) — never automatic.
+            else if ((keys_down & HidNpadButton_R) || (keys_down & HidNpadButton_L)) {
+                if (detail_layout && detail_layout->GetCard()) {
+                    detail_layout->GetCard()->ToggleImageMode();
+                }
             }
 
             // B to exit detail - single press only
@@ -963,35 +1706,6 @@ namespace romm::navigation {
                 std::cout << "[NAV] [B PRESS] B pressed in detail view: returning to Library" << std::endl;
                 std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Detail Screen -> Library Screen" << std::endl;
             }
-            else if (detail_focus == DetailFocus::Tabs) {
-                if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                    if (selected_detail_tab_idx > 0) {
-                        selected_detail_tab_idx--;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL TAB CHANGE] Selected detail tab: " << selected_detail_tab_idx << std::endl;
-                    } else {
-                        // Left on first tab -> go to Cover
-                        detail_focus = DetailFocus::Cover;
-                        state_changed = true;
-                        if (detail_layout) detail_layout->UpdateFooterHints();
-                        std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> Cover" << std::endl;
-                    }
-                }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    if (selected_detail_tab_idx + 1 < romm::ui::DetailCard::GetTabCount()) {
-                        selected_detail_tab_idx++;
-                        state_changed = true;
-                        std::cout << "[NAV] [DETAIL TAB CHANGE] Selected detail tab: " << selected_detail_tab_idx << std::endl;
-                    }
-                }
-                else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    detail_focus = DetailFocus::Actions;
-                    selected_detail_action_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> Download Button" << std::endl;
-                }
-            }
             else if (detail_focus == DetailFocus::Cover) {
                 if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
                     detail_focus = DetailFocus::Actions;
@@ -999,13 +1713,6 @@ namespace romm::navigation {
                     state_changed = true;
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Cover -> Actions" << std::endl;
-                }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    detail_focus = DetailFocus::Tabs;
-                    selected_detail_tab_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Cover -> Tabs" << std::endl;
                 }
                 else if (keys_down & HidNpadButton_A) {
                     if (detail_layout && detail_layout->GetCard()) {
@@ -1032,50 +1739,26 @@ namespace romm::navigation {
                     if (detail_layout) detail_layout->UpdateFooterHints();
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Cover" << std::endl;
                 }
-                else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                    detail_focus = DetailFocus::Tabs;
-                    selected_detail_tab_idx = 0;
-                    state_changed = true;
-                    if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Actions -> Tabs" << std::endl;
-                }
-                // A on download action - single press only
+                // A on the sync action - single press only. The sync options
+                // modal opens first; the worker starts on confirmation there.
                 else if (keys_down & HidNpadButton_A) {
-                    std::cout << "[NAV] [A PRESS] Triggered detail action" << std::endl;
-                    
+                    std::cout << "[NAV] [A PRESS] Triggered detail action (Sync)" << std::endl;
                     if (detail_layout) {
                         int rom_id = detail_layout->ctx.rom_id;
                         const auto* detail = model->GetCachedDetail(rom_id);
-                        if (detail) {
-                            auto& dl_mgr = romm::model::DownloadManager::Instance();
-                            auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
-
-                            if (detail_layout->GetCard()) {
-                                romm::ui::DownloadActionState action = detail_layout->GetCard()->GetActionState();
-                                
-                                if (action == romm::ui::DownloadActionState::Uninstall) {
-                                    // Open Modal
-                                    UninstallModalPayload p;
-                                    p.rom_id = rom_id;
-                                    p.platform_slug = detail_layout->ctx.platform_slug;
-                                    p.title = detail_layout->ctx.title;
-                                    // Multi-disc: pass the root .m3u identity; UninstallGame
-                                    // sweeps the subfolder discs and playlist from there.
-                                    p.filename = dl_mgr.InstallIdentityFilename(
-                                        detail_layout->ctx.platform_slug, detail->files, detail->file_name);
-                                    p.cover_path = detail_layout->ctx.cover_path;
-                                    p.source_screen = current_screen;
-                                    ShowUninstallModal(p);
-                                } else if (action == romm::ui::DownloadActionState::Queued) {
-                                    dl_mgr.RemoveFromQueue(rom_id);
-                                } else if (action == romm::ui::DownloadActionState::Failed) {
-                                    dl_mgr.RetryFailed(rom_id);
-                                } else if (action == romm::ui::DownloadActionState::Download || action == romm::ui::DownloadActionState::AddToQueue) {
-                                    dl_mgr.EnqueueDownload(*detail, detail_layout->ctx.platform_slug, detail_layout->ctx.title);
-                                }
-                            }
-                        } else {
+                        if (!detail) {
                             std::cerr << "[NAV] Detail not loaded yet." << std::endl;
+                        } else {
+                            sync_modal_active = true;
+                            sync_modal_mode = romm::navigation::SyncModalMode::Options;
+                            sync_option_idx = 0;
+                            sync_opt_force_rom = false;
+                            sync_opt_force_cover = false;
+                            sync_opt_background = false;
+                            sync_opt_save_dir = 0;
+                            sync_conflict_selected_idx = 0;
+                            sync_bulk_pending = false;
+                            std::cout << "[NAV] [SYNC] Sync options opened for rom_id=" << rom_id << std::endl;
                         }
                     }
                 }
@@ -1110,6 +1793,14 @@ namespace romm::navigation {
                     state_changed = true;
                 }
             }
+        }
+        else if (current_screen == Screen::SaveData) {
+            HandleSaveDataInput(keys_down, keys_effective);
+            state_changed = true;
+        }
+        else if (current_screen == Screen::StateData) {
+            HandleStateDataInput(keys_down, keys_effective);
+            state_changed = true;
         }
         else if (current_screen == Screen::Settings) {
             // Forward input to settings layout if confirmation modal is open
@@ -1147,93 +1838,12 @@ namespace romm::navigation {
                 else if (keys_down & HidNpadButton_A) {
                     settings_focus = SettingsFocusArea::OptionList;
                     selected_settings_option_idx = 0;
-                    if (selected_settings_category_idx == 3) {
-                        rom_path_rows_focused = false;
-                        selected_rom_path_row_idx = 0;
-                    }
                     state_changed = true;
                     std::cout << "[SETTINGS] Entered OptionList for Category " << selected_settings_category_idx << std::endl;
                 }
             }
             else {
                 // OptionList Focus
-                if (selected_settings_category_idx == 3) {
-                    // Custom ROM Paths navigation
-                    if (rom_path_rows_focused) {
-                        // Path-row focus
-                        if (keys_down & HidNpadButton_B) {
-                            rom_path_rows_focused = false;
-                            state_changed = true;
-                        }
-                        else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
-                            if (selected_rom_path_row_idx > 0) {
-                                selected_rom_path_row_idx--;
-                                state_changed = true;
-                            }
-                        }
-                        else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                            if (selected_rom_path_row_idx + 1 < romm::ui::SettingsLayout::GetSelectableRomPathRowCount()) {
-                                selected_rom_path_row_idx++;
-                                state_changed = true;
-                            }
-                        }
-                        else if (keys_down & HidNpadButton_A) {
-                            if (settings_layout) {
-                                settings_layout->EditSelectedRomPath();
-                                state_changed = true;
-                            }
-                        }
-                        else if (keys_down & HidNpadButton_X) {
-                            if (settings_layout) {
-                                settings_layout->ValidateOrCreateSelectedPath();
-                                state_changed = true;
-                            }
-                        }
-                        else if (keys_down & HidNpadButton_Y) {
-                            if (settings_layout) {
-                                settings_layout->ResetSelectedRomPath();
-                                state_changed = true;
-                            }
-                        }
-                    }
-                    else {
-                        // Platform-tab focus
-                        if (keys_down & HidNpadButton_B) {
-                            settings_focus = SettingsFocusArea::CategoryList;
-                            state_changed = true;
-                        }
-                        else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                            size_t max_idx = romm::ui::SettingsLayout::GetSupportedPlatformsCount() - 1;
-                            if (selected_rom_path_platform_idx > 0) {
-                                selected_rom_path_platform_idx--;
-                            } else {
-                                selected_rom_path_platform_idx = max_idx;
-                            }
-                            state_changed = true;
-                            if (settings_layout) {
-                                settings_layout->OnSelectionUpdated(); // Refreshes status on platform tab switch
-                            }
-                        }
-                        else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                            size_t max_idx = romm::ui::SettingsLayout::GetSupportedPlatformsCount() - 1;
-                            if (selected_rom_path_platform_idx < max_idx) {
-                                selected_rom_path_platform_idx++;
-                            } else {
-                                selected_rom_path_platform_idx = 0;
-                            }
-                            state_changed = true;
-                            if (settings_layout) {
-                                settings_layout->OnSelectionUpdated(); // Refreshes status on platform tab switch
-                            }
-                        }
-                        else if (keys_down & HidNpadButton_A) {
-                            rom_path_rows_focused = true;
-                            selected_rom_path_row_idx = 0;
-                            state_changed = true;
-                        }
-                    }
-                }
-                else {
                     // General option navigation
                     if (keys_down & HidNpadButton_B) {
                         settings_focus = SettingsFocusArea::CategoryList;
@@ -1259,10 +1869,7 @@ namespace romm::navigation {
                     // row/category (Download Sound Pack is now a single
                     // A-press action, not browsable).
                     else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
-                        if (selected_settings_category_idx == 4 && settings_layout) {
-                            settings_layout->ToggleSelectedPlatform(false); // Left = Hidden
-                            state_changed = true;
-                        } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
+                        if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
                             settings_layout->CycleStartupSound(-1);
                             state_changed = true;
                         } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 3 && settings_layout) {
@@ -1277,10 +1884,7 @@ namespace romm::navigation {
                         }
                     }
                     else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                        if (selected_settings_category_idx == 4 && settings_layout) {
-                            settings_layout->ToggleSelectedPlatform(true); // Right = Shown
-                            state_changed = true;
-                        } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
+                        if (selected_settings_category_idx == 1 && selected_settings_option_idx == 2 && settings_layout) {
                             settings_layout->CycleStartupSound(1);
                             state_changed = true;
                         } else if (selected_settings_category_idx == 1 && selected_settings_option_idx == 3 && settings_layout) {
@@ -1300,40 +1904,11 @@ namespace romm::navigation {
                             state_changed = true;
                         }
                     }
-                }
-            }
-        }
-        else if (current_screen == Screen::Installed) {
-            if (keys_down & HidNpadButton_B) {
-                current_screen = Screen::MainMenu;
-                state_changed = true;
-                app->LoadLayout(main_menu_layout);
-            }
-            else {
-                installed_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
-            }
-        }
-        else if (current_screen == Screen::Queue) {
-            if (keys_down & HidNpadButton_B) {
-                current_screen = Screen::MainMenu;
-                state_changed = true;
-                app->LoadLayout(main_menu_layout);
-            }
-            else {
-                queue_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
-            }
-        }
-        else if (current_screen == Screen::FileBrowser) {
-            if (file_browser_layout) {
-                file_browser_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
             }
         }
 
         if (current_screen != old_screen) {
             last_transition_time = std::chrono::high_resolution_clock::now();
-            if (old_screen == Screen::FileBrowser && file_browser_layout) {
-                file_browser_layout->CancelPendingScan();
-            }
         }
 
         if (state_changed) {

@@ -108,6 +108,12 @@ namespace romm::model {
         std::string slug;
         std::vector<Game> games;
         ApiState roms_state = ApiState::Idle;
+
+        // ROM count reported by the server (read at fetch time so the sidebar
+        // can show only platforms that actually carry ROMs). has_rom_count is
+        // false for servers that don't report the field.
+        long long rom_count = 0;
+        bool has_rom_count = false;
     };
 
     enum class DetailLoadState {
@@ -124,6 +130,20 @@ namespace romm::model {
         int id = 0;
         std::string file_name;
         long long file_size_bytes = 0;
+    };
+
+    // One save belonging to a ROM, as returned by GET /api/saves. Only the
+    // fields used to list and download saves are kept.
+    struct SaveEntry {
+        int id = 0;
+        int rom_id = 0;
+        std::string file_name;          // server-side file name, used on disk
+        long long file_size_bytes = 0;
+        std::string emulator;           // nullable on the server
+        std::string slot;               // nullable on the server
+        bool missing_from_fs = false;
+        std::string created_at;
+        std::string updated_at;
     };
 
     struct GameDetail {

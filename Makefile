@@ -24,7 +24,7 @@ INCLUDES	:=	include temp_plutonium/Plutonium/include
 ROMFS		:=	romfs
 
 APP_TITLE	:=	Romm-NX
-APP_AUTHOR	:=	r4lix
+APP_AUTHOR	:=	pvskp
 # Single source of truth: source/Version.hpp
 # Extract version string and code at build time so NRO nacp metadata stays in sync.
 APP_VERSION	:=	$(shell grep 'ROMM_NX_VERSION ' $(TOPDIR)/source/Version.hpp | grep -o '[0-9][0-9.]*')

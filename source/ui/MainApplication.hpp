@@ -43,15 +43,6 @@ namespace romm::ui {
         // Worked through one at a time via the existing single-slot detail
         // request rather than firing N fetches at once, which would flood the
         // High lane exactly the way the cover backlog used to flood the queue.
-        struct BulkDownloadItem {
-            int rom_id = 0;
-            std::string platform_slug;
-            std::string title;
-            bool detail_requested = false;
-        };
-        std::vector<BulkDownloadItem> bulk_queue;
-        void PollBulkDownload();
-
         void PollNetworkRequests();
         void PollDeferredNetworkStart();
         void PollDetailPrefetch();
@@ -69,9 +60,6 @@ namespace romm::ui {
         void TriggerFetchRoms(int platform_id);
         void TriggerFetchPlatforms();
         void TriggerFetchRomDetail(int rom_id, uint64_t generation = 0, const std::string& platform_slug = "");
-        // Adds a ROM to the bulk download queue; ignores duplicates.
-        void EnqueueBulkDownload(int rom_id, const std::string& platform_slug, const std::string& title);
-        size_t GetBulkQueueRemaining() const { return bulk_queue.size(); }
         int GetCurrentRomsRequestId() const { return current_roms_request_id; }
 
         PU_SMART_CTOR(MainApplication)

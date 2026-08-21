@@ -2,7 +2,7 @@
 #include "RomPathManager.hpp"
 #include "JsonUtil.hpp"
 #include "DataModel.hpp"
-#include "PlatformCatalog.hpp"
+#include "TicoCatalog.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdio>
 #include <iostream>
@@ -81,74 +81,6 @@ namespace romm::model {
         return inst;
     }
 
-    ConfigManager::ConfigManager() {
-        // Initialize default ROM paths
-        rom_paths["psx"] = "sdmc:/roms/ps1/";
-        rom_paths["psp"] = "sdmc:/roms/psp/";
-        rom_paths["nds"] = "sdmc:/roms/nds/";
-        rom_paths["gb"] = "sdmc:/roms/gb/";
-        rom_paths["gbc"] = "sdmc:/roms/gbc/";
-        rom_paths["gba"] = "sdmc:/roms/gba/";
-        rom_paths["3ds"] = "sdmc:/roms/3ds/";
-
-        // Seed the shipped defaults so a first launch (or a config file that
-        // predates this setting) already hides the right platforms without
-        // waiting for Load() to say so.
-        ResetPlatformVisibilityDefaults();
-    }
-
-    // --- Platform visibility -------------------------------------------------
-
-    bool ConfigManager::IsPlatformVisible(const std::string& slug) const {
-        const std::string id = NormalizePlatformId(slug);
-        if (id.empty()) return true; // nothing to key on; never hide it
-        return hidden_platforms.find(id) == hidden_platforms.end();
-    }
-
-    void ConfigManager::SetPlatformVisible(const std::string& slug, bool visible) {
-        const std::string id = NormalizePlatformId(slug);
-        if (id.empty()) return;
-        known_platforms.insert(id);
-        if (visible) {
-            hidden_platforms.erase(id);
-        } else {
-            hidden_platforms.insert(id);
-        }
-    }
-
-    void ConfigManager::ResetPlatformVisibilityDefaults() {
-        hidden_platforms.clear();
-        for (const auto& id : GetDefaultHiddenPlatformIds()) {
-            hidden_platforms.insert(id);
-        }
-        // Server-only platforms aren't in the catalogue, so "default" for them
-        // is hidden — same rule new detections get.
-        for (const auto& id : known_platforms) {
-            if (!IsPlatformVisibleByDefault(id)) {
-                hidden_platforms.insert(id);
-            }
-        }
-    }
-
-    void ConfigManager::ShowAllPlatforms() {
-        hidden_platforms.clear();
-    }
-
-    bool ConfigManager::RegisterDetectedPlatforms(const std::vector<std::string>& slugs) {
-        bool changed = false;
-        for (const auto& slug : slugs) {
-            const std::string id = NormalizePlatformId(slug);
-            if (id.empty()) continue;
-            if (!known_platforms.insert(id).second) continue; // already seen
-            changed = true;
-            if (!IsPlatformVisibleByDefault(id)) {
-                hidden_platforms.insert(id);
-                std::cout << "[PLATFORMS] New platform '" << id << "' detected, hidden by default" << std::endl;
-            }
-        }
-        return changed;
-    }
-
     namespace {
         std::string GridViewModeToString(GridViewMode m) {
             switch (m) {
@@ -194,32 +126,44 @@ namespace romm::model {
         platform_grid_view_mode[norm] = m;
     }
 
-    void ConfigManager::SetPsxDownloadDir(const std::string& dir) {
-        psx_download_dir = dir;
-        // Normalize psx_download_dir to have trailing slash
-        if (!psx_download_dir.empty() && psx_download_dir.back() != '/') {
-            psx_download_dir += "/";
+    void ConfigManager::SetRomsBaseDir(const std::string& dir) {
+        roms_base_dir = dir;
+        if (!roms_base_dir.empty() && roms_base_dir.back() != '/') {
+            roms_base_dir += "/";
         }
-        rom_paths["psx"] = psx_download_dir;
     }
 
     std::string ConfigManager::GetRomPath(const std::string& platform) const {
-        auto it = rom_paths.find(platform);
-        if (it != rom_paths.end()) {
-            return it->second;
-        }
-        return "sdmc:/roms/" + platform + "/";
+        return roms_base_dir + "roms/" + NormalizePlatformSlug(platform) + "/";
     }
 
-    void ConfigManager::SetRomPath(const std::string& platform, const std::string& path) {
-        std::string p = path;
-        if (!p.empty() && p.back() != '/') {
-            p += "/";
+    void ConfigManager::SetTicoBaseDir(const std::string& dir) {
+        tico_base_dir = dir;
+        if (!tico_base_dir.empty() && tico_base_dir.back() != '/') {
+            tico_base_dir += "/";
         }
-        rom_paths[platform] = p;
-        if (platform == "psx" || platform == "playstation" || platform == "ps1") {
-            psx_download_dir = p;
-        }
+    }
+
+    std::string ConfigManager::GetTicoRomPath(const std::string& romm_slug) const {
+        return tico_base_dir + "roms/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoSavePath(const std::string& romm_slug) const {
+        return tico_base_dir + "saves/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoStatePath(const std::string& romm_slug) const {
+        return tico_base_dir + "states/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoCoverPath(const std::string& romm_slug) const {
+        return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
+    std::string ConfigManager::GetTicoBackgroundPath(const std::string& romm_slug,
+                                                     const std::string& game_base) const {
+        return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) +
+               "/" + game_base + ".jpg";
     }
 
     bool ConfigManager::Load() {
@@ -386,42 +330,6 @@ namespace romm::model {
         jsonExtractBool(content, "check_updates_on_startup", check_updates_on_startup);
         jsonExtractString(content, "dismissed_update_version", dismissed_update_version);
 
-        // Platform visibility. A config written before this setting existed has
-        // neither key — the constructor's defaults then stand, which is exactly
-        // the "initialize the default hidden platforms" case. Malformed data
-        // (key present but not a string array) makes jsonExtractStringArray
-        // return false and is treated the same way. Every id is re-normalized
-        // on the way in, so a hand-edited "playstation-2" still matches "ps2".
-        {
-            std::vector<std::string> hidden_list;
-            if (jsonExtractStringArray(content, "hidden_platforms", hidden_list)) {
-                hidden_platforms.clear();
-                for (const auto& raw : hidden_list) {
-                    std::string id = NormalizePlatformId(raw);
-                    if (!id.empty()) hidden_platforms.insert(id);
-                }
-            }
-
-            std::vector<std::string> known_list;
-            if (jsonExtractStringArray(content, "known_platforms", known_list)) {
-                known_platforms.clear();
-                for (const auto& raw : known_list) {
-                    std::string id = NormalizePlatformId(raw);
-                    if (!id.empty()) known_platforms.insert(id);
-                }
-            }
-            // Seed the known set from what we can prove was known: everything
-            // in the catalogue plus anything already hidden. Without this, a
-            // config carrying only hidden_platforms would treat every built-in
-            // platform as brand new on the next fetch and re-hide it.
-            for (const auto& entry : GetPlatformCatalog()) {
-                known_platforms.insert(entry.id);
-            }
-            for (const auto& id : hidden_platforms) {
-                known_platforms.insert(id);
-            }
-        }
-
         // Per-platform grid view mode overrides (set via the in-game Y-Menu;
         // independent of the global grid_view_mode default above).
         platform_grid_view_mode.clear();
@@ -433,41 +341,23 @@ namespace romm::model {
             }
         }
 
-        // Load PS1 download dir
-        std::string psx_path = extractPlatformPath(content, "rom_paths", "psx");
-        if (psx_path.empty()) {
-            psx_path = extractPlatformPath(content, "download_dirs", "psx");
-        }
-
-        if (!psx_path.empty()) {
-            psx_download_dir = psx_path;
-        }
-
-        // Normalize psx_download_dir to have trailing slash
-        if (!psx_download_dir.empty() && psx_download_dir.back() != '/') {
-            psx_download_dir += "/";
-        }
-        // Force valid root if tampered
-        if (!romm::model::RomPathManager::ValidatePath(psx_download_dir)) {
-            psx_download_dir = "sdmc:/roms/ps1/";
-        }
-        rom_paths["psx"] = psx_download_dir;
-
-        // Extract any other platforms if they exist
-        std::vector<std::string> known_platforms = {"ps2", "psp", "nds", "gb", "gbc", "gba", "3ds"};
-        for (const auto& plat : known_platforms) {
-            std::string plat_path = extractPlatformPath(content, "rom_paths", plat);
-            if (plat_path.empty()) {
-                plat_path = extractPlatformPath(content, "download_dirs", plat);
+        // A single configurable base directory covers every platform; per-system
+        // overrides were removed in favour of <base>/roms/<system>/.
+        std::string base_dir;
+        if (jsonExtractString(content, "roms_base_dir", base_dir) && !base_dir.empty()) {
+            SetRomsBaseDir(base_dir);
+            if (!romm::model::RomPathManager::ValidatePath(roms_base_dir)) {
+                roms_base_dir = "sdmc:/romm-nx/";
             }
-            if (!plat_path.empty()) {
-                if (plat_path.back() != '/') plat_path += "/";
-                if (!romm::model::RomPathManager::ValidatePath(plat_path)) {
-                    plat_path = (plat == "psp" ? "sdmc:/roms/psp/" : "sdmc:/roms/" + plat + "/");
-                }
-                rom_paths[plat] = plat_path;
-            } else {
-                rom_paths[plat] = (plat == "psp" ? "sdmc:/roms/psp/" : "sdmc:/roms/" + plat + "/");
+        }
+
+        // Tico base directory. Absent on configs written before this feature —
+        // then the constructor default ("sdmc:/tico/") stands.
+        std::string tico_dir;
+        if (jsonExtractString(content, "tico_base_dir", tico_dir) && !tico_dir.empty()) {
+            SetTicoBaseDir(tico_dir);
+            if (!romm::model::RomPathManager::ValidatePath(tico_base_dir)) {
+                tico_base_dir = "sdmc:/tico/";
             }
         }
 
@@ -533,14 +423,8 @@ namespace romm::model {
         content += "    \"server_url\": \"" + romm_host + "\",\n";
         content += "    \"api_key\": \"" + api_key + "\"\n";
         content += "  },\n";
-        content += "  \"rom_paths\": {\n";
-        bool first = true;
-        for (const auto& pair : rom_paths) {
-            if (!first) content += ",\n";
-            first = false;
-            content += "    \"" + pair.first + "\": \"" + pair.second + "\"";
-        }
-        content += "\n  },\n";
+        content += "  \"roms_base_dir\": \"" + roms_base_dir + "\",\n";
+        content += "  \"tico_base_dir\": \"" + tico_base_dir + "\",\n";
         content += "  \"cache\": {\n";
         content += "    \"auto_clear_enabled\": " + std::string(auto_clear_enabled ? "true" : "false") + ",\n";
         content += "    \"max_size_mb\": " + std::to_string(max_size_mb) + ",\n";
@@ -569,22 +453,6 @@ namespace romm::model {
         content += "  \"installed_update_channel\": \"" + installed_update_channel + "\",\n";
         content += "  \"check_updates_on_startup\": " + std::string(check_updates_on_startup ? "true" : "false") + ",\n";
         content += "  \"dismissed_update_version\": \"" + dismissed_update_version + "\",\n";
-
-        // Settings > Platforms. hidden_platforms is the user-facing list;
-        // known_platforms is bookkeeping so a platform detected later can be
-        // hidden by default exactly once, instead of every launch.
-        auto writeIdArray = [&content](const char* key, const std::set<std::string>& ids, bool last) {
-            content += std::string("  \"") + key + "\": [";
-            bool first_id = true;
-            for (const auto& id : ids) {
-                if (!first_id) content += ", ";
-                first_id = false;
-                content += "\"" + id + "\"";
-            }
-            content += last ? "]\n" : "],\n";
-        };
-        writeIdArray("hidden_platforms", hidden_platforms, false);
-        writeIdArray("known_platforms", known_platforms, true);
 
         content += "}\n";
 
