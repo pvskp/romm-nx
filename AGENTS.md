@@ -6,11 +6,28 @@ Guidelines for AI agents (and humans) working in this repo.
 
 Commit only when the user explicitly reports that a feature or fix they
 requested is working ("está funcionando", "funciona", "ok", "ótimo",
-"perfeito", "commite", etc.). Passing tests and lint are necessary but NOT
-sufficient — a green test run never triggers a commit by itself. Split
+"perfeito", "commite", etc.). A successful build is necessary but NOT
+sufficient — a green build never triggers a commit by itself. Split
 unrelated changes into separate commits (one logical change per commit) and
-exclude `TODO.txt` unless the user asks otherwise. Before committing, run
-`make test` and `make lint` and verify with `git diff --cached --check`.
+exclude `TODO.txt` unless the user asks otherwise. Before committing, build
+the project (see below) and verify with `git diff --cached --check`.
+
+## Build / toolchain
+
+This is a Nintendo Switch homebrew project built with
+[devkitPro](https://devkitpro.org/) (`devkitA64` + `libnx`). The toolchain is
+already installed on in the path stored in `DEVKITPRO`, so a plain build works
+without extra setup:
+
+```
+make            # cross-compiles and links build/romm-nx.nro
+make -j$(nproc) # parallel build
+make clean      # remove build/ and the .nro/.elf/.nacp artifacts
+```
+
+The project uses C++20 (`-std=gnu++20`) with exceptions and RTTI disabled
+(`-fno-rtti -fno-exceptions`), so new code must not rely on RTTI (no
+`dynamic_cast` / `typeid`) or throw/catch exceptions.
 
 ## Commit messages
 
