@@ -1773,6 +1773,36 @@ namespace romm::model {
         return result;
     }
 
+    std::shared_ptr<SaveDownloadResult> DownloadManager::DownloadStateEntry(
+            const SaveEntry& state, const std::string& final_path) {
+        auto result = std::make_shared<SaveDownloadResult>();
+
+        auto& config = ConfigManager::Instance();
+        if (!config.IsValid()) {
+            std::cerr << "[State] Download blocked: Configuration is invalid" << std::endl;
+            result->completed = true;
+            result->error = romm::i18n::tr("save.error.config");
+            return result;
+        }
+
+        std::string url = config.GetRommHost() + "/api/states/" + std::to_string(state.id) + "/content";
+        std::map<std::string, std::string> headers = {
+            {"Authorization", "Bearer " + config.GetApiKey()}
+        };
+
+        std::cout << "[State] Downloading rom_id=" << state.rom_id << " state_id=" << state.id
+                  << " -> " << final_path << std::endl;
+
+        DownloadOutcome oc = DownloadToPath(url, headers, final_path, state.file_size_bytes);
+        result->completed = true;
+        result->success = oc.success;
+        if (!oc.success) {
+            result->error = oc.error_message.empty() ? romm::i18n::tr("save.error.write")
+                                                     : oc.error_message;
+        }
+        return result;
+    }
+
     void DownloadManager::SetTaskState(int rom_id, DownloadState state) {
         std::lock_guard<std::mutex> lock(task_mutex);
         for (auto& t : download_queue) {

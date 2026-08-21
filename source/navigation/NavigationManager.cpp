@@ -3,6 +3,7 @@
 #include "../model/DownloadManager.hpp"
 #include "../model/SyncManager.hpp"
 #include "../model/SaveManager.hpp"
+#include "../model/StateManager.hpp"
 #include "../ui/MainMenuLayout.hpp"
 #include "../ui/LibraryLayout.hpp"
 #include "../ui/GameGrid.hpp"
@@ -10,6 +11,7 @@
 #include "../ui/DetailLayout.hpp"
 #include "../ui/SettingsLayout.hpp"
 #include "../ui/SaveDataLayout.hpp"
+#include "../ui/StateDataLayout.hpp"
 #include "../ui/LibraryMenuModal.hpp"
 #include "../ui/AlphabetBar.hpp"
 #include "../ui/MainApplication.hpp"
@@ -58,7 +60,8 @@ namespace romm::navigation {
         switch (idx) {
             case 0: return "Games";
             case 1: return "Save Data";
-            case 2: return "Settings";
+            case 2: return "States";
+            case 3: return "Settings";
             default: return "Unknown";
         }
     }
@@ -141,6 +144,7 @@ namespace romm::navigation {
         settings_layout = std::make_shared<romm::ui::SettingsLayout>(shared_from_this());
         fullscreen_image_layout = std::make_shared<romm::ui::FullscreenImageLayout>();
         save_data_layout = std::make_shared<romm::ui::SaveDataLayout>(shared_from_this());
+        state_data_layout = std::make_shared<romm::ui::StateDataLayout>(shared_from_this());
 
         std::cout << "[NAV] [LAYOUT TRANSITION] Loading MainMenuLayout as default screen" << std::endl;
         app->LoadLayout(main_menu_layout);
@@ -160,6 +164,8 @@ namespace romm::navigation {
             settings_layout->UpdateFooterHints(settings_focus);
         } else if (current_screen == Screen::SaveData && save_data_layout) {
             save_data_layout->OnSelectionUpdated();
+        } else if (current_screen == Screen::StateData && state_data_layout) {
+            state_data_layout->OnSelectionUpdated();
         }
     }
 
@@ -317,6 +323,7 @@ namespace romm::navigation {
         save_action_idx = 0;
         save_detail_rom_id = 0;
         save_detail_focus = SaveDetailFocus::Local;
+        save_detail_actions_origin = SaveDetailFocus::Local;
         save_detail_server_sel = 0;
         save_detail_action_idx = 0;
 
@@ -327,6 +334,42 @@ namespace romm::navigation {
         if (save_data_layout) {
             app->LoadLayout(save_data_layout);
         }
+    }
+
+    void NavigationManager::OpenStateData() {
+        current_screen = Screen::StateData;
+        state_platform_idx = 0;
+        state_game_idx = 0;
+        state_detail_open = false;
+        state_list_focus = 0;
+        state_action_idx = 0;
+        state_detail_rom_id = 0;
+        state_detail_focus = SaveDetailFocus::Local;
+        state_detail_actions_origin = SaveDetailFocus::Local;
+        state_detail_server_sel = 0;
+        state_detail_action_idx = 0;
+
+        // Kick the first platform's refresh. If its ROMs aren't loaded yet,
+        // trigger the fetch too — the view re-runs the refresh once they land.
+        SelectStatePlatform();
+
+        if (state_data_layout) {
+            app->LoadLayout(state_data_layout);
+        }
+    }
+
+    // Switches the State Data platform cursor: fetches ROMs on demand and
+    // re-targets the StateManager refresh at the newly selected platform.
+    void NavigationManager::SelectStatePlatform() {
+        const auto& platforms = model->GetPlatforms();
+        if (state_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[state_platform_idx];
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+        }
+        romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [STATES] Platform -> " << plat.name << std::endl;
     }
 
     void NavigationManager::HandleSaveDataInput(u64 keys_down, u64 keys_effective) {
@@ -374,12 +417,21 @@ namespace romm::navigation {
                 if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
                     if (save_detail_server_sel > 0) save_detail_server_sel--;
                 } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    if (save_detail_server_sel + 1 < save_count) save_detail_server_sel++;
+                    if (save_detail_server_sel + 1 < save_count) {
+                        save_detail_server_sel++;
+                    } else {
+                        // Bottom of the version list: next Down drops to the
+                        // action buttons, mirroring the level-1 list -> bar.
+                        save_detail_focus = SaveDetailFocus::Actions;
+                        save_detail_action_idx = 0;
+                        save_detail_actions_origin = SaveDetailFocus::Server;
+                    }
                 } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
                     save_detail_focus = SaveDetailFocus::Local;
                 } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
                     save_detail_focus = SaveDetailFocus::Actions;
                     save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Server;
                 } else if (keys_down & HidNpadButton_A) {
                     // Download the selected server version directly. The
                     // displayed list is newest-first; the server's order is
@@ -403,9 +455,12 @@ namespace romm::navigation {
                     }
                 }
             } else if (save_detail_focus == SaveDetailFocus::Actions) {
-                if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                // The buttons sit below the cards: Up returns to whichever
+                // card dropped the focus down here.
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    save_detail_focus = save_detail_actions_origin;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
                     if (save_detail_action_idx > 0) save_detail_action_idx--;
-                    else save_detail_focus = SaveDetailFocus::Server;
                 } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
                     if (save_detail_action_idx + 1 < 3) save_detail_action_idx++;
                 } else if (keys_down & HidNpadButton_A) {
@@ -430,9 +485,15 @@ namespace romm::navigation {
                 if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
                     save_detail_focus = SaveDetailFocus::Server;
                     save_detail_server_sel = 0;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    // The action buttons are directly below the cards.
+                    save_detail_focus = SaveDetailFocus::Actions;
+                    save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
                 } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
                     save_detail_focus = SaveDetailFocus::Actions;
-                    save_detail_action_idx = 2;
+                    save_detail_action_idx = 0;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
                 }
             }
             return;
@@ -504,6 +565,7 @@ namespace romm::navigation {
                     save_detail_open = true;
                     save_detail_rom_id = plat.games[save_game_idx].id;
                     save_detail_focus = SaveDetailFocus::Local;
+                    save_detail_actions_origin = SaveDetailFocus::Local;
                     save_detail_server_sel = 0;
                     save_detail_action_idx = 0;
                     std::cout << "[NAV] [SAVES] Opened per-game view rom="
@@ -542,6 +604,242 @@ namespace romm::navigation {
                 sync_modal_mode = SyncModalMode::Progress;
                 save_rescan_pending = true;
                 std::cout << "[NAV] [SAVES] Batch action " << save_action_idx
+                          << " on " << plat.slug << " games=" << games.size() << std::endl;
+            }
+        }
+    }
+
+    void NavigationManager::HandleStateDataInput(u64 keys_down, u64 keys_effective) {
+        // Re-scan the local side once a transfer started from this screen
+        // finishes (slot fingerprints and verdicts changed with it).
+        if (state_rescan_pending && !romm::model::SyncManager::Instance().IsRunning()) {
+            state_rescan_pending = false;
+            romm::model::StateManager::Instance().RescanLocal();
+        }
+
+        const auto& platforms = model->GetPlatforms();
+        if (platforms.empty()) {
+            if (keys_down & HidNpadButton_B) {
+                current_screen = Screen::MainMenu;
+                app->LoadLayout(main_menu_layout);
+            }
+            return;
+        }
+
+        const size_t plat_count = platforms.size();
+        const auto& plat = platforms[state_platform_idx < plat_count ? state_platform_idx : 0];
+
+        // ---- Per-game comparison view ------------------------------------
+        if (state_detail_open) {
+            if (keys_down & HidNpadButton_B) {
+                state_detail_open = false;
+                state_detail_rom_id = 0;
+                std::cout << "[NAV] [STATES] Closed per-game view" << std::endl;
+                return;
+            }
+            // ZR re-checks the whole platform from the detail view too.
+            if (keys_down & HidNpadButton_ZR) {
+                romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+                return;
+            }
+
+            const auto snap = romm::model::StateManager::Instance().GetSnapshot();
+            const romm::model::StateGameState* game = nullptr;
+            for (const auto& g : snap.games) {
+                if (g.rom_id == state_detail_rom_id) { game = &g; break; }
+            }
+            const size_t state_count = game ? game->server_states.size() : 0;
+
+            if (state_detail_focus == SaveDetailFocus::Server) {
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    if (state_detail_server_sel > 0) state_detail_server_sel--;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    if (state_detail_server_sel + 1 < state_count) {
+                        state_detail_server_sel++;
+                    } else {
+                        // Bottom of the version list: next Down drops to the
+                        // action buttons, mirroring the level-1 list -> bar.
+                        state_detail_focus = SaveDetailFocus::Actions;
+                        state_detail_action_idx = 0;
+                        state_detail_actions_origin = SaveDetailFocus::Server;
+                    }
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    state_detail_focus = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Server;
+                } else if (keys_down & HidNpadButton_A) {
+                    // Download the selected server state directly. The
+                    // displayed list is newest-first; the server's order is
+                    // not guaranteed, so resolve through the same sort.
+                    if (game && state_detail_server_sel < game->server_states.size()) {
+                        std::vector<romm::model::SaveEntry> sorted = game->server_states;
+                        std::sort(sorted.begin(), sorted.end(),
+                                  [](const romm::model::SaveEntry& a, const romm::model::SaveEntry& b) {
+                                      return a.updated_at > b.updated_at;
+                                  });
+                        if (state_detail_server_sel < sorted.size()) {
+                            const auto& state = sorted[state_detail_server_sel];
+                            std::cout << "[NAV] [STATES] Downloading server state "
+                                      << state.file_name << " for rom " << state_detail_rom_id << std::endl;
+                            auto& sync = romm::model::SyncManager::Instance();
+                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state);
+                            sync_modal_active = true;
+                            sync_modal_mode = SyncModalMode::Progress;
+                            state_rescan_pending = true;
+                        }
+                    }
+                }
+            } else if (state_detail_focus == SaveDetailFocus::Actions) {
+                // The buttons sit below the cards: Up returns to whichever
+                // card dropped the focus down here.
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    state_detail_focus = state_detail_actions_origin;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    if (state_detail_action_idx > 0) state_detail_action_idx--;
+                } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    if (state_detail_action_idx + 1 < 3) state_detail_action_idx++;
+                } else if (keys_down & HidNpadButton_A) {
+                    if (game) {
+                        romm::model::SyncOptions opts;
+                        opts.states_only = true;
+                        if (state_detail_action_idx == 1) opts.force_state_upload = true;
+                        else if (state_detail_action_idx == 2) opts.force_state_download = true;
+
+                        romm::model::GameDetail minimal;
+                        minimal.rom_id = game->rom_id;
+                        auto& sync = romm::model::SyncManager::Instance();
+                        sync.StartSync(minimal, plat.slug, game->title, opts);
+                        sync_modal_active = true;
+                        sync_modal_mode = SyncModalMode::Progress;
+                        state_rescan_pending = true;
+                        std::cout << "[NAV] [STATES] Single-game action " << state_detail_action_idx
+                                  << " for rom " << game->rom_id << std::endl;
+                    }
+                }
+            } else { // SaveDetailFocus::Local
+                if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    state_detail_focus = SaveDetailFocus::Server;
+                    state_detail_server_sel = 0;
+                } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    // The action buttons are directly below the cards.
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                    state_detail_focus = SaveDetailFocus::Actions;
+                    state_detail_action_idx = 0;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                }
+            }
+            return;
+        }
+
+        // ---- Game list ----------------------------------------------------
+        if (keys_down & HidNpadButton_B) {
+            current_screen = Screen::MainMenu;
+            app->LoadLayout(main_menu_layout);
+            std::cout << "[NAV] [B PRESS] State Data -> Main Menu" << std::endl;
+            return;
+        }
+
+        // ZR re-checks the server for the whole platform, from any zone.
+        if (keys_down & HidNpadButton_ZR) {
+            romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+            return;
+        }
+
+        const size_t game_count = plat.games.size();
+
+        // Three focus zones, mirroring the Save Data screen: the platform
+        // strip first (Left/Right enters the list), then the game list, then
+        // the batch action bar (Down reaches it from anywhere in the list).
+        if (state_list_focus == 0) {
+            // Platform list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (state_platform_idx > 0) {
+                    state_platform_idx--;
+                    state_game_idx = 0;
+                    SelectStatePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (state_platform_idx + 1 < plat_count) {
+                    state_platform_idx++;
+                    state_game_idx = 0;
+                    SelectStatePlatform();
+                }
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                state_list_focus = 1;
+                std::cout << "[NAV] [STATES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                state_list_focus = 1;
+            }
+        } else if (state_list_focus == 1) {
+            // Game list.
+            if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                if (state_game_idx > 0) state_game_idx--;
+            } else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                if (state_game_idx + 1 < game_count) {
+                    state_game_idx++;
+                } else {
+                    // Bottom of the list: next Down drops to the action bar.
+                    state_list_focus = 2;
+                    state_action_idx = 0;
+                    std::cout << "[NAV] [STATES] Focus -> action bar" << std::endl;
+                }
+            } else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                state_list_focus = 0;
+                std::cout << "[NAV] [STATES] Focus -> platform list" << std::endl;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                // Right always jumps to the bar, whatever the scroll position.
+                state_list_focus = 2;
+                state_action_idx = 0;
+                std::cout << "[NAV] [STATES] Focus -> action bar" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count > 0 && state_game_idx < game_count) {
+                    state_detail_open = true;
+                    state_detail_rom_id = plat.games[state_game_idx].id;
+                    state_detail_focus = SaveDetailFocus::Local;
+                    state_detail_actions_origin = SaveDetailFocus::Local;
+                    state_detail_server_sel = 0;
+                    state_detail_action_idx = 0;
+                    std::cout << "[NAV] [STATES] Opened per-game view rom="
+                              << state_detail_rom_id << std::endl;
+                }
+            }
+        } else {
+            // Batch action bar.
+            if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft)) {
+                if (state_action_idx > 0) state_action_idx--;
+            } else if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                if (state_action_idx + 1 < 3) state_action_idx++;
+            } else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                state_list_focus = 1;
+                std::cout << "[NAV] [STATES] Focus -> game list" << std::endl;
+            } else if (keys_down & HidNpadButton_A) {
+                if (game_count == 0) return;
+                std::vector<romm::model::SyncGameEntry> games;
+                games.reserve(game_count);
+                for (const auto& g : plat.games) {
+                    romm::model::SyncGameEntry e;
+                    e.rom_id = g.id;
+                    e.title = g.title;
+                    e.platform_slug = plat.slug;
+                    games.push_back(e);
+                }
+
+                romm::model::SyncOptions opts;
+                opts.states_only = true;
+                if (state_action_idx == 1) opts.force_state_upload = true;
+                else if (state_action_idx == 2) opts.force_state_download = true;
+
+                auto& sync = romm::model::SyncManager::Instance();
+                sync.StartPlatformSync(plat.slug, plat.name, games, opts);
+                sync_modal_active = true;
+                sync_modal_mode = SyncModalMode::Progress;
+                state_rescan_pending = true;
+                std::cout << "[NAV] [STATES] Batch action " << state_action_idx
                           << " on " << plat.slug << " games=" << games.size() << std::endl;
             }
         }
@@ -910,10 +1208,10 @@ namespace romm::navigation {
 
         if (current_screen == Screen::MainMenu) {
             size_t old_idx = selected_menu_idx;
-            // Main Menu navigation: three cards — 0 = Games, 1 = Save Data,
-            // 2 = Settings.
+            // Main Menu navigation: four cards — 0 = Games, 1 = Save Data,
+            // 2 = States, 3 = Settings.
             if ((keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
-                if (selected_menu_idx < 2) {
+                if (selected_menu_idx < 3) {
                     selected_menu_idx++;
                     state_changed = true;
                 }
@@ -945,6 +1243,10 @@ namespace romm::navigation {
                     OpenSaveData();
                     state_changed = true;
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Save Data Screen" << std::endl;
+                } else if (selected_menu_idx == 2) { // States
+                    OpenStateData();
+                    state_changed = true;
+                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> State Data Screen" << std::endl;
                 } else { // Settings
                     current_screen = Screen::Settings;
                     selected_settings_category_idx = 0;
@@ -1494,6 +1796,10 @@ namespace romm::navigation {
         }
         else if (current_screen == Screen::SaveData) {
             HandleSaveDataInput(keys_down, keys_effective);
+            state_changed = true;
+        }
+        else if (current_screen == Screen::StateData) {
+            HandleStateDataInput(keys_down, keys_effective);
             state_changed = true;
         }
         else if (current_screen == Screen::Settings) {

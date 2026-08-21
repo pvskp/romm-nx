@@ -78,6 +78,7 @@ namespace romm::ui {
             const char* stage_key = "sync.stage.rom";
             switch (stage.stage) {
                 case romm::model::SyncStage::Saves:      stage_key = "sync.stage.saves"; break;
+                case romm::model::SyncStage::States:     stage_key = "sync.stage.states"; break;
                 case romm::model::SyncStage::Cover:      stage_key = "sync.stage.cover"; break;
                 case romm::model::SyncStage::Background: stage_key = "sync.stage.background"; break;
                 default: break;

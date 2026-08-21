@@ -152,6 +152,10 @@ namespace romm::model {
         return tico_base_dir + "saves/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
     }
 
+    std::string ConfigManager::GetTicoStatePath(const std::string& romm_slug) const {
+        return tico_base_dir + "states/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
+    }
+
     std::string ConfigManager::GetTicoCoverPath(const std::string& romm_slug) const {
         return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
     }

@@ -464,6 +464,19 @@ std::shared_ptr<HttpResult> HttpClient::uploadFileAsync(
     return result;
 }
 
+std::shared_ptr<HttpResult> HttpClient::postJsonAsync(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    const std::string& json_body,
+    HttpPriority priority) {
+
+    auto result = std::make_shared<HttpResult>();
+    queue()->enqueue([=]() {
+        performRequest(true, url, headers, json_body, result);
+    }, priority);
+    return result;
+}
+
 void HttpClient::runAsync(std::function<void()> task, HttpPriority priority) {
     queue()->enqueue(std::move(task), priority);
 }

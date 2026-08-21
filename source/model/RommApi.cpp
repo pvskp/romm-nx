@@ -147,6 +147,112 @@ namespace romm::model {
         return result;
     }
 
+    std::shared_ptr<StateFetchResult> RommApi::fetchStatesAsync(int romId) {
+        auto& config = ConfigManager::Instance();
+        if (!config.IsValid()) {
+            std::cerr << "[api] API call blocked: Configuration is invalid" << std::endl;
+            return nullptr;
+        }
+
+        std::ostringstream url;
+        url << config.GetRommHost() << "/api/states?rom_id=" << romId;
+        std::string url_str = url.str();
+
+        std::map<std::string, std::string> headers = {
+            {"Authorization", "Bearer " + config.GetApiKey()},
+            {"Accept", "application/json"}
+        };
+
+        std::cout << "[api] Fetching states asynchronously for rom_id=" << romId << std::endl;
+
+        auto result = std::make_shared<StateFetchResult>();
+        result->rom_id = romId;
+        HttpClient::runAsync([=]() {
+            HttpResult http_res = HttpClient::getSync(url_str, headers);
+            result->statusCode = http_res.statusCode;
+            result->success = http_res.success;
+            if (http_res.success) {
+                if (!romm::model::jsonParseSaveItems(http_res.body, result->states)) {
+                    result->success = false;
+                } else {
+                    std::cout << "[api] Parsed states count=" << result->states.size() << std::endl;
+                }
+            }
+            result->completed = true;
+        }, HttpPriority::High);
+
+        return result;
+    }
+
+    std::shared_ptr<HttpResult> RommApi::uploadStateAsync(
+        int rom_id, const std::string& emulator, bool overwrite,
+        const std::string& local_path, const std::string& file_name_on_server) {
+
+        auto& config = ConfigManager::Instance();
+        if (!config.IsValid()) {
+            std::cerr << "[api] API call blocked: Configuration is invalid" << std::endl;
+            return nullptr;
+        }
+
+        std::ostringstream url;
+        url << config.GetRommHost() << "/api/states?rom_id=" << rom_id;
+        if (!emulator.empty()) {
+            url << "&emulator=" << emulator;
+        }
+        url << "&overwrite=" << (overwrite ? "true" : "false");
+        std::string url_str = url.str();
+
+        std::map<std::string, std::string> headers = {
+            {"Authorization", "Bearer " + config.GetApiKey()},
+            {"Accept", "application/json"}
+        };
+        std::map<std::string, std::string> fields;
+        if (!emulator.empty()) {
+            fields["emulator"] = emulator;
+        }
+        fields["overwrite"] = overwrite ? "true" : "false";
+
+        std::cout << "[api] Uploading state to " << url_str << std::endl;
+        // The states endpoint's multipart field is "stateFile" (saves use
+        // "saveFile"); sending the wrong field name fails with a 422.
+        return HttpClient::uploadFileAsync(url_str, headers, fields,
+                                           "stateFile", local_path, file_name_on_server,
+                                           HttpPriority::High);
+    }
+
+    std::shared_ptr<HttpResult> RommApi::deleteStatesAsync(
+        const std::vector<int>& state_ids) {
+
+        auto& config = ConfigManager::Instance();
+        if (!config.IsValid()) {
+            std::cerr << "[api] API call blocked: Configuration is invalid" << std::endl;
+            return nullptr;
+        }
+
+        std::ostringstream url;
+        url << config.GetRommHost() << "/api/states/delete";
+        std::string url_str = url.str();
+
+        std::map<std::string, std::string> headers = {
+            {"Authorization", "Bearer " + config.GetApiKey()},
+            {"Content-Type", "application/json"},
+            {"Accept", "application/json"}
+        };
+
+        std::ostringstream body;
+        body << "{\"states\": [";
+        for (size_t i = 0; i < state_ids.size(); ++i) {
+            if (i) body << ", ";
+            body << state_ids[i];
+        }
+        body << "]}";
+
+        std::cout << "[api] Deleting " << state_ids.size() << " state(s) via "
+                  << url_str << std::endl;
+        return HttpClient::postJsonAsync(url_str, headers, body.str(),
+                                         HttpPriority::High);
+    }
+
     std::shared_ptr<HttpResult> RommApi::uploadSaveAsync(
         int rom_id, const std::string& emulator, bool overwrite,
         const std::string& local_path, const std::string& file_name_on_server) {

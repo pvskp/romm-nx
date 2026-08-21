@@ -13,7 +13,7 @@ namespace romm::model {
 
     // The steps of a per-game sync, in execution order. Background only
     // exists when the "cover as platform background" option is on.
-    enum class SyncStage { Rom, Saves, Cover, Background };
+    enum class SyncStage { Rom, Saves, States, Cover, Background };
 
     enum class SyncStageState {
         Pending,
@@ -90,6 +90,20 @@ namespace romm::model {
         // run just the saves stage. Used by the Save Data screen's per-game
         // and batch actions.
         bool saves_only = false;
+        // State management only: skip everything else and run just the states
+        // stage (per-slot save states). Used by the State Data screen.
+        bool states_only = false;
+        bool force_state_upload = false;   // push local state slots unconditionally
+        bool force_state_download = false; // pull server states unconditionally
+    };
+
+    // One state slot's record inside sync_state.json: the server's state id
+    // and updated_at plus a fingerprint of the local slot file, exactly like
+    // the save-side fields — per slot, since a game has up to nine states.
+    struct StateSlotRecord {
+        int server_state_id = 0;             // 0 = nothing uploaded/known yet
+        std::string server_state_updated_at;
+        std::string state_local_fingerprint; // "<size>-<shorthash>"
     };
 
     // One game's record inside sync_state.json. The fingerprint pairs the
@@ -104,6 +118,8 @@ namespace romm::model {
         int server_save_id = 0;             // 0 = nothing uploaded/known yet
         std::string server_save_updated_at;
         long long cover_size = 0;           // size of the cover last synced
+        // Per-slot save-state records; a slot with no record was never synced.
+        std::map<int, StateSlotRecord> state_slots;
     };
 
     class SyncManager {
@@ -129,6 +145,11 @@ namespace romm::model {
         void StartSpecificSaveDownload(int rom_id, const std::string& platform_slug,
                                        const std::string& title, const SaveEntry& save);
 
+        // Downloads one specific server state to its local slot file (State
+        // Data screen), like the save variant above.
+        void StartSpecificStateDownload(int rom_id, const std::string& platform_slug,
+                                        const std::string& title, const SaveEntry& state);
+
         SyncSnapshot GetSnapshot() const;
         bool IsRunning() const;
 
@@ -145,6 +166,36 @@ namespace romm::model {
         static std::string ShortHash(const std::string& path);
         // "<size>-<shorthash>" for a file, "" if it doesn't exist.
         static std::string CalcFingerprint(const std::string& path);
+
+        // The name a save is stored under on the RomM server: the local
+        // file's base name with its Tico extension (".sav", N64 ".fla")
+        // rewritten to the standard ".srm" battery-save extension the server's
+        // emulator integration reads.
+        static std::string ServerSaveName(const std::string& local_path);
+
+        // Parses "<base>.stateN" (or any name containing ".stateN") into the
+        // slot number 0..9. Tico names the auto-slot "<base>.state0"; some
+        // RetroArch cores write plain "<base>.state", which also maps to slot
+        // 0. Anything unrecognisable returns 1 as the safe default.
+        static int ParseStateSlot(const std::string& file_name);
+
+        // The canonical local file name for a state slot:
+        // "<rom_base>.state0" for the auto-slot and "<rom_base>.stateN" for
+        // slots 1..9.
+        static std::string StateSlotName(const std::string& rom_base, int slot);
+
+        // The existing on-disk file for a state slot, preferring the canonical
+        // name and falling back to plain "<base>.state" for the auto-slot
+        // (some cores write it that way). Empty when the slot has no file.
+        static std::string FindLocalStatePath(const std::string& state_dir,
+                                              const std::string& rom_base, int slot);
+
+        // Strict slot match: the server file name must be exactly
+        // "<rom_base>.state[N]" (the names we upload under). Returns 0..9, or
+        // -1 when the name doesn't match the pattern. Both "<base>.state0"
+        // and "<base>.state" map to the auto-slot.
+        static int MatchStateSlot(const std::string& file_name,
+                                  const std::string& rom_base);
 
         // True when `filename`'s extension is a compressed archive (7z, zip,
         // rar, ...). Tico can't run these directly — the UI warns the user to
@@ -199,8 +250,20 @@ namespace romm::model {
         static void* SyncTrampoline(void* arg);
         static void* PlatformSyncTrampoline(void* arg);
         static void* SpecificSaveTrampoline(void* arg);
+        static void* SpecificStateTrampoline(void* arg);
         void SpecificSaveWorker(int rom_id, const std::string& platform_slug,
                                 const std::string& title, const SaveEntry& save);
+        void SpecificStateWorker(int rom_id, const std::string& platform_slug,
+                                 const std::string& title, const SaveEntry& state);
+        bool RunStateDownload(const SaveEntry& state, const std::string& target,
+                              int rom_id, int slot, const std::string& tico_slug,
+                              const std::string& rom_path, long long rom_size);
+        bool RunStateUpload(const std::string& target, int rom_id, int slot,
+                            const std::string& tico_slug, const std::string& core,
+                            const std::string& rom_path, long long rom_size);
+        void RunStatesStage(int rom_id, const std::string& tico_slug,
+                            const std::string& state_dir, const std::string& rom_base,
+                            const SyncOptions& options);
 
         mutable std::mutex mutex_;      // guards snapshot_
         SyncSnapshot snapshot_;

@@ -187,6 +187,9 @@ namespace romm::model {
         void SetTicoBaseDir(const std::string& dir);
         std::string GetTicoRomPath(const std::string& romm_slug) const;
         std::string GetTicoSavePath(const std::string& romm_slug) const;
+        // Save states live one level up from saves, in Tico's states folder:
+        // <base>/states/<platform>/<game_base>.state1..9 (one file per slot).
+        std::string GetTicoStatePath(const std::string& romm_slug) const;
         std::string GetTicoCoverPath(const std::string& romm_slug) const;
         // One background image per game, mirroring Tico's cover layout:
         // <base>/assets/backgrounds/<platform>/<game_base>.jpg. The base name

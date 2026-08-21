@@ -61,5 +61,14 @@ public:
         const std::string& file_name_on_server,
         HttpPriority priority = HttpPriority::Normal);
 
+    // POST application/json with a raw JSON body (e.g. RomM's /api/states/delete).
+    // Runs on the HTTP pool; the returned result's `completed` flips when the
+    // transfer is done.
+    static std::shared_ptr<HttpResult> postJsonAsync(
+        const std::string& url,
+        const std::map<std::string, std::string>& headers,
+        const std::string& json_body,
+        HttpPriority priority = HttpPriority::Normal);
+
     static void runAsync(std::function<void()> task, HttpPriority priority = HttpPriority::Normal);
 };

@@ -197,6 +197,9 @@ namespace romm::model {
         // resolved by the sync pipeline, with the Tico extension and no RomM
         // timestamp suffix). Synchronous wrapper over DownloadToPath.
         std::shared_ptr<SaveDownloadResult> DownloadSave(const SaveEntry& save, const std::string& final_path);
+        // GET /api/states/{id}/content — states share SaveEntry's shape, so
+        // the download result type is the same.
+        std::shared_ptr<SaveDownloadResult> DownloadStateEntry(const SaveEntry& state, const std::string& final_path);
 
         ~DownloadManager();
 

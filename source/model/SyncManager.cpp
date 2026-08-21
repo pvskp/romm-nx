@@ -44,10 +44,106 @@ namespace romm::model {
             SaveEntry save;
         };
 
+        // One specific server state to pull (State Data screen).
+        struct SpecificStateJob {
+            int rom_id = 0;
+            std::string platform_slug;
+            std::string title;
+            SaveEntry state;
+        };
+
         std::string StripExtension(const std::string& filename) {
             size_t dot = filename.find_last_of('.');
             return (dot != std::string::npos) ? filename.substr(0, dot) : filename;
         }
+
+        // The index of the '}' that matches the '{' at `open`, skipping
+        // string contents. LoadSyncState reads a hand-rolled JSON file that
+        // has gained a nested object (state_slots), so the old
+        // "first '}' after '{'" scan would truncate every entry.
+        size_t FindJsonObjectEnd(const std::string& json, size_t open) {
+            int depth = 0;
+            bool in_string = false;
+            bool escaped = false;
+            for (size_t i = open; i < json.size(); ++i) {
+                const char c = json[i];
+                if (in_string) {
+                    if (escaped) { escaped = false; continue; }
+                    if (c == '\\') { escaped = true; continue; }
+                    if (c == '"') in_string = false;
+                    continue;
+                }
+                if (c == '"') { in_string = true; continue; }
+                if (c == '{') { depth++; continue; }
+                if (c == '}') {
+                    depth--;
+                    if (depth == 0) return i;
+                }
+            }
+            return std::string::npos;
+        }
+
+        // Parses "<base>.stateN" (or any name containing ".stateN") into the
+        // slot number 0..9. Tico names the auto-slot "<base>.state0"; some
+        // RetroArch cores write plain "<base>.state", which also maps to slot
+        // 0. Anything unrecognisable returns 1 as the safe default.
+        int ParseStateSlotImpl(const std::string& file_name) {
+            const std::string marker = ".state";
+            size_t m = file_name.find(marker);
+            if (m == std::string::npos) return 1;
+            std::string tail = file_name.substr(m + marker.size());
+            if (tail.empty()) return 0;
+            if (tail.size() > 2) return 1;
+            for (char c : tail) {
+                if (c < '0' || c > '9') return 1;
+            }
+            const int slot = atoi(tail.c_str());
+            return (slot >= 0 && slot <= 9) ? slot : 1;
+        }
+    } // namespace
+
+    // Public wrappers (used by StateManager too).
+    int SyncManager::ParseStateSlot(const std::string& file_name) {
+        return ParseStateSlotImpl(file_name);
+    }
+
+    std::string SyncManager::StateSlotName(const std::string& rom_base, int slot) {
+        if (slot <= 0) return rom_base + ".state0";
+        return rom_base + ".state" + std::to_string(slot);
+    }
+
+    std::string SyncManager::FindLocalStatePath(const std::string& state_dir,
+                                                const std::string& rom_base, int slot) {
+        struct stat st;
+        const std::string primary = state_dir + StateSlotName(rom_base, slot);
+        if (stat(primary.c_str(), &st) == 0 && st.st_size > 0) {
+            return primary;
+        }
+        if (slot == 0) {
+            const std::string legacy = state_dir + rom_base + ".state";
+            if (stat(legacy.c_str(), &st) == 0 && st.st_size > 0) {
+                return legacy;
+            }
+        }
+        return "";
+    }
+
+    int SyncManager::MatchStateSlot(const std::string& file_name,
+                                    const std::string& rom_base) {
+        if (rom_base.empty()) return -1;
+        const std::string prefix = rom_base + ".state";
+        if (file_name.rfind(prefix, 0) != 0) return -1;
+        const std::string tail = file_name.substr(prefix.size());
+        if (tail.empty()) return 0;
+        if (tail.size() > 2) return -1;
+        for (char c : tail) {
+            if (c < '0' || c > '9') return -1;
+        }
+        const int slot = atoi(tail.c_str());
+        return (slot >= 0 && slot <= 9) ? slot : -1;
+    }
+
+    namespace {
 
         // Copies one small file (cover art) to another path, creating the
         // destination's parent folder. Plain FILE I/O is fine here — covers
@@ -114,6 +210,13 @@ namespace romm::model {
         return nullptr;
     }
 
+    void* SyncManager::SpecificStateTrampoline(void* arg) {
+        std::unique_ptr<SpecificStateJob> job(static_cast<SpecificStateJob*>(arg));
+        SyncManager::Instance().SpecificStateWorker(job->rom_id, job->platform_slug,
+                                                    job->title, job->state);
+        return nullptr;
+    }
+
     SyncManager& SyncManager::Instance() {
         static SyncManager inst;
         return inst;
@@ -155,6 +258,18 @@ namespace romm::model {
         return std::to_string(st.st_size) + "-" + ShortHash(path);
     }
 
+    std::string SyncManager::ServerSaveName(const std::string& local_path) {
+        size_t slash = local_path.find_last_of('/');
+        std::string name = (slash != std::string::npos) ? local_path.substr(slash + 1) : local_path;
+        size_t dot = name.find_last_of('.');
+        if (dot != std::string::npos) {
+            name = name.substr(0, dot) + ".srm";
+        } else {
+            name += ".srm";
+        }
+        return name;
+    }
+
     bool SyncManager::IsCompressedArchive(const std::string& filename) {
         size_t dot = filename.find_last_of('.');
         if (dot == std::string::npos) return false;
@@ -181,7 +296,7 @@ namespace romm::model {
 
         size_t pos = 0;
         while ((pos = content.find("{", pos)) != std::string::npos) {
-            size_t end_pos = content.find("}", pos);
+            size_t end_pos = FindJsonObjectEnd(content, pos);
             if (end_pos == std::string::npos) break;
             std::string block = content.substr(pos, end_pos - pos + 1);
 
@@ -194,6 +309,39 @@ namespace romm::model {
                 jsonExtractInt(block, "server_save_id", entry.server_save_id);
                 jsonExtractString(block, "server_save_updated_at", entry.server_save_updated_at);
                 jsonExtractLongLong(block, "cover_size", entry.cover_size);
+
+                // "state_slots": {"1": {"id":..., "updated_at":..., "fingerprint":...}, ...}
+                size_t slots_key = block.find("\"state_slots\"");
+                if (slots_key != std::string::npos) {
+                    size_t colon = block.find(':', slots_key);
+                    size_t slots_open = (colon != std::string::npos) ? block.find('{', colon) : std::string::npos;
+                    if (slots_open != std::string::npos) {
+                        const size_t slots_end = FindJsonObjectEnd(block, slots_open);
+                        if (slots_end != std::string::npos) {
+                            const std::string slots_json = block.substr(slots_open, slots_end - slots_open + 1);
+                            size_t p = 0;
+                            while ((p = slots_json.find("\"", p)) != std::string::npos) {
+                                const size_t q = slots_json.find('"', p + 1);
+                                if (q == std::string::npos) break;
+                                const int slot = atoi(slots_json.substr(p + 1, q - p - 1).c_str());
+                                if (slot < 0 || slot > 9) { p = q + 1; continue; }
+                                const size_t c2 = slots_json.find(':', q);
+                                const size_t rec_open = (c2 != std::string::npos) ? slots_json.find('{', c2) : std::string::npos;
+                                if (rec_open == std::string::npos) break;
+                                const size_t rec_end = FindJsonObjectEnd(slots_json, rec_open);
+                                if (rec_end == std::string::npos) break;
+                                const std::string rec_json = slots_json.substr(rec_open, rec_end - rec_open + 1);
+                                StateSlotRecord rec;
+                                jsonExtractInt(rec_json, "id", rec.server_state_id);
+                                jsonExtractString(rec_json, "updated_at", rec.server_state_updated_at);
+                                jsonExtractString(rec_json, "fingerprint", rec.state_local_fingerprint);
+                                entry.state_slots[slot] = rec;
+                                p = rec_end + 1;
+                            }
+                        }
+                    }
+                }
+
                 sync_state_[entry.rom_id] = entry;
             }
             pos = end_pos + 1;
@@ -235,6 +383,17 @@ namespace romm::model {
             json += ", \"server_save_id\": " + std::to_string(e.server_save_id);
             json += ", \"server_save_updated_at\": \"" + escape(e.server_save_updated_at) + "\"";
             json += ", \"cover_size\": " + std::to_string(e.cover_size);
+            json += ", \"state_slots\": {";
+            bool first_slot = true;
+            for (const auto& sp : e.state_slots) {
+                if (!first_slot) json += ",";
+                first_slot = false;
+                json += "\"" + std::to_string(sp.first) + "\": {\"id\": "
+                        + std::to_string(sp.second.server_state_id)
+                        + ", \"updated_at\": \"" + escape(sp.second.server_state_updated_at) + "\""
+                        + ", \"fingerprint\": \"" + escape(sp.second.state_local_fingerprint) + "\"}";
+            }
+            json += "}";
             json += "}";
         }
         json += "\n]\n";
@@ -469,6 +628,108 @@ namespace romm::model {
         Finish();
     }
 
+    void SyncManager::StartSpecificStateDownload(int rom_id, const std::string& platform_slug,
+                                                 const std::string& title, const SaveEntry& state) {
+        if (worker_running_.load()) {
+            std::cout << "[SYNC] Already running, ignoring specific state download for rom_id="
+                      << rom_id << std::endl;
+            return;
+        }
+
+        LoadSyncState();
+        cancel_requested_ = false;
+        conflict_pending_ = false;
+        conflict_skipped_ = false;
+
+        if (thread_started_) {
+            pthread_join(worker_thread_, nullptr);
+            thread_started_ = false;
+        }
+
+        SpecificStateJob* job = new SpecificStateJob();
+        job->rom_id = rom_id;
+        job->platform_slug = platform_slug;
+        job->title = title;
+        job->state = state;
+
+        worker_running_ = true;
+
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 0x100000);
+        const int rc = pthread_create(&worker_thread_, &attr, &SpecificStateTrampoline, job);
+        pthread_attr_destroy(&attr);
+        if (rc != 0) {
+            delete job;
+            worker_running_ = false;
+            std::cerr << "[SYNC] Failed to spawn specific-state worker thread" << std::endl;
+            return;
+        }
+        thread_started_ = true;
+        std::cout << "[SYNC] Started specific state download rom_id=" << rom_id
+                  << " state_id=" << state.id << std::endl;
+    }
+
+    void SyncManager::SpecificStateWorker(int rom_id, const std::string& platform_slug,
+                                          const std::string& title, const SaveEntry& state) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            snapshot_ = SyncSnapshot();
+            snapshot_.running = true;
+            snapshot_.rom_id = rom_id;
+            snapshot_.platform_slug = platform_slug;
+            snapshot_.bulk_mode = false;
+            snapshot_.bulk_index = 0;
+            snapshot_.bulk_total = 1;
+        }
+        SyncOptions opts;
+        opts.states_only = true;
+        ResetStages(title, opts);
+        ScreenWakeManager::Instance().RequestUpdate();
+
+        // Resolve the state folder from the sync-state record (the ROM name
+        // the game was synced under).
+        std::string tico_slug;
+        std::string rom_path;
+        long long rom_size = 0;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
+                tico_slug = it->second.platform;
+                rom_path = it->second.rom_path;
+                rom_size = it->second.rom_size;
+            }
+        }
+        std::string rom_name;
+        {
+            size_t slash = rom_path.find_last_of('/');
+            if (slash != std::string::npos) rom_name = rom_path.substr(slash + 1);
+        }
+        const std::string rom_base = StripExtension(rom_name);
+        auto& config = ConfigManager::Instance();
+        const int slot = ParseStateSlot(state.file_name);
+        std::string state_target;
+        if (!rom_base.empty()) {
+            state_target = config.GetTicoStatePath(platform_slug) + StateSlotName(rom_base, slot);
+        }
+
+        if (cancel_requested_.load()) {
+            Finish();
+            return;
+        }
+        if (state_target.empty()) {
+            SetStage(SyncStage::States, SyncStageState::Failed,
+                     romm::i18n::tr("sync.rom.no_files"));
+            Finish();
+            return;
+        }
+
+        RunStateDownload(state, state_target, rom_id, slot,
+                         tico_slug, rom_path, rom_size);
+        Finish();
+    }
+
     bool SyncManager::IsRunning() const {
         return worker_running_.load();
     }
@@ -623,8 +884,13 @@ namespace romm::model {
                                     const std::string& rom_path, long long rom_size) {
         SetStage(SyncStage::Saves, SyncStageState::Running, romm::i18n::tr("sync.saves.uploading"));
 
-        size_t slash = target.find_last_of('/');
-        std::string server_name = (slash != std::string::npos) ? target.substr(slash + 1) : target;
+        // RomM links saves to the game by file name, and its emulator
+        // integration only reads the standard .srm battery-save extension.
+        // The local file keeps the Tico extension (".sav", N64 ".fla") — only
+        // the name sent to the server is rewritten to .srm.
+        const std::string server_name = ServerSaveName(target);
+        std::cout << "[SYNC] Uploading save as \"" << server_name << "\" (local: "
+                  << target << ")" << std::endl;
 
         auto res = RommApi::uploadSaveAsync(rom_id, core, true, target, server_name);
         if (!WaitForCompleted(res, cancel_requested_)) return false;
@@ -832,6 +1098,332 @@ namespace romm::model {
         }
     }
 
+    // Downloads one server state to its local slot file and records the
+    // result in sync_state. Returns true on success.
+    bool SyncManager::RunStateDownload(const SaveEntry& state, const std::string& target,
+                                       int rom_id, int slot, const std::string& tico_slug,
+                                       const std::string& rom_path, long long rom_size) {
+        SetStage(SyncStage::States, SyncStageState::Running, romm::i18n::tr("sync.states.downloading"));
+
+        auto& dl = DownloadManager::Instance();
+        auto sr = dl.DownloadStateEntry(state, target);
+        if (!sr->success) {
+            SetStage(SyncStage::States, SyncStageState::Failed,
+                     romm::i18n::format("sync.states.failed", {{"error", sr->error}}));
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            SyncStateEntry& e = sync_state_[rom_id];
+            e.rom_id = rom_id;
+            e.platform = tico_slug;
+            e.rom_path = rom_path;
+            e.rom_size = rom_size;
+            StateSlotRecord& rec = e.state_slots[slot];
+            rec.server_state_id = state.id;
+            rec.server_state_updated_at = state.updated_at;
+            rec.state_local_fingerprint = CalcFingerprint(target);
+        }
+        SaveSyncState();
+
+        SetStage(SyncStage::States, SyncStageState::Ok,
+                 romm::i18n::format("sync.states.downloaded", {{"name", state.file_name}}));
+        return true;
+    }
+
+    // Uploads the local state slot file at `target` to RomM and records the
+    // result in sync_state. The local file is already named "<base>.stateN",
+    // and that is exactly the name the server should store. Returns true on
+    // success.
+    bool SyncManager::RunStateUpload(const std::string& target, int rom_id, int slot,
+                                     const std::string& tico_slug, const std::string& core,
+                                     const std::string& rom_path, long long rom_size) {
+        SetStage(SyncStage::States, SyncStageState::Running, romm::i18n::tr("sync.states.uploading"));
+
+        size_t slash = target.find_last_of('/');
+        const std::string server_name = (slash != std::string::npos) ? target.substr(slash + 1) : target;
+
+        auto res = RommApi::uploadStateAsync(rom_id, core, true, target, server_name);
+        if (!WaitForCompleted(res, cancel_requested_)) return false;
+        if (!res->success) {
+            SetStage(SyncStage::States, SyncStageState::Failed,
+                     romm::i18n::format("sync.states.failed", {{"error", res->error.empty()
+                                                                          ? ("HTTP " + std::to_string(res->statusCode))
+                                                                          : res->error}}));
+            return false;
+        }
+
+        int new_id = 0;
+        std::string new_updated;
+        jsonExtractInt(res->body, "id", new_id);
+        jsonExtractString(res->body, "updated_at", new_updated);
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            SyncStateEntry& e = sync_state_[rom_id];
+            e.rom_id = rom_id;
+            e.platform = tico_slug;
+            e.rom_path = rom_path;
+            e.rom_size = rom_size;
+            StateSlotRecord& rec = e.state_slots[slot];
+            rec.server_state_id = new_id;
+            rec.server_state_updated_at = new_updated;
+            rec.state_local_fingerprint = CalcFingerprint(target);
+        }
+        SaveSyncState();
+
+        SetStage(SyncStage::States, SyncStageState::Ok,
+                 romm::i18n::format("sync.states.uploaded", {{"name", server_name}}));
+        return true;
+    }
+
+    // Full per-slot decision flow for save states, mirroring RunSavesStage.
+    // The worker walks every slot with anything on either side (a local file,
+    // a recorded record, or a server state matched by name) and downloads,
+    // uploads, skips or prompts per slot, using the exact same decision table
+    // as saves.
+    void SyncManager::RunStatesStage(int rom_id, const std::string& tico_slug,
+                                     const std::string& state_dir, const std::string& rom_base,
+                                     const SyncOptions& options) {
+        std::string core = ResolveTicoCore(tico_slug);
+        if (core.empty()) {
+            SetStage(SyncStage::States, SyncStageState::Unsupported,
+                     romm::i18n::tr("sync.saves.unsupported"));
+            return;
+        }
+
+        SetStage(SyncStage::States, SyncStageState::Running, romm::i18n::tr("sync.states.checking"));
+        if (cancel_requested_.load()) return;
+
+        auto fetch = RommApi::fetchStatesAsync(rom_id);
+        if (!fetch) {
+            SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            return;
+        }
+        if (!WaitForCompleted(fetch, cancel_requested_)) return;
+        if (!fetch->success) {
+            SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.states.fetch_failed"));
+            return;
+        }
+
+        SyncStateEntry entry;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
+                entry = it->second;
+            }
+        }
+
+        // Match server states to slots by name ("<base>.state" / "<base>.stateN"
+        // — the names we upload under). States from RomM's own streaming UI
+        // usually carry a "[timestamp]" prefix and are left unmatched: they
+        // stay visible in the State Data list for manual download, but are
+        // never overwritten.
+        std::map<int, const SaveEntry*> server_by_slot;
+        for (const auto& s : fetch->states) {
+            if (s.missing_from_fs) continue;
+            const int slot = MatchStateSlot(s.file_name, rom_base);
+            if (slot < 0) continue;
+            server_by_slot[slot] = &s;
+        }
+
+        // Slots worth looking at: a local file, a recorded record, or a
+        // matched server state. Slot 0 is the auto-slot, stored as
+        // "<base>.state0" (or plain "<base>.state" by some cores).
+        std::map<int, bool> slots_to_check;
+        for (int slot = 0; slot <= 9; ++slot) {
+            if (!FindLocalStatePath(state_dir, rom_base, slot).empty()) {
+                slots_to_check[slot] = true;
+            }
+        }
+        for (const auto& sp : entry.state_slots) slots_to_check[sp.first] = true;
+        for (const auto& sp : server_by_slot) slots_to_check[sp.first] = true;
+
+        // The states endpoint has no overwrite parameter, so every upload
+        // creates a new entry. Deleting the same-named server states first is
+        // what makes a re-upload replace instead of duplicate.
+        auto delete_server_states_named = [&](const std::string& name) {
+            std::vector<int> ids;
+            for (const auto& s : fetch->states) {
+                if (!s.missing_from_fs && s.file_name == name) {
+                    ids.push_back(s.id);
+                }
+            }
+            if (ids.empty()) return;
+            auto del = RommApi::deleteStatesAsync(ids);
+            if (del) WaitForCompleted(del, cancel_requested_);
+        };
+
+        bool all_ok = true;
+        for (const auto& slot_pair : slots_to_check) {
+            if (cancel_requested_.load()) break;
+            const int slot = slot_pair.first;
+
+            // Transfer target: the file already on disk when it exists (so
+            // uploads send the name the emulator reads), otherwise the
+            // canonical "<base>.stateN" name.
+            const std::string canonical = state_dir + StateSlotName(rom_base, slot);
+            const std::string actual = FindLocalStatePath(state_dir, rom_base, slot);
+            const std::string local_path = actual.empty() ? canonical : actual;
+            size_t name_slash = local_path.find_last_of('/');
+            const std::string upload_name = (name_slash != std::string::npos)
+                                                ? local_path.substr(name_slash + 1)
+                                                : local_path;
+            const SaveEntry* server_save = server_by_slot.count(slot) ? server_by_slot[slot] : nullptr;
+            StateSlotRecord rec;
+            const bool has_rec = (entry.state_slots.find(slot) != entry.state_slots.end());
+            if (has_rec) rec = entry.state_slots[slot];
+
+            struct stat st;
+            const bool local_exists = (stat(local_path.c_str(), &st) == 0 && st.st_size > 0);
+            const std::string local_fp = local_exists ? CalcFingerprint(local_path) : "";
+
+            const bool synced_before = has_rec && rec.server_state_id != 0 &&
+                                       !rec.server_state_updated_at.empty();
+            const bool server_changed = server_save &&
+                (rec.server_state_updated_at.empty() ||
+                 server_save->updated_at != rec.server_state_updated_at);
+            const bool local_changed = local_exists && local_fp != rec.state_local_fingerprint;
+
+            if (options.force_state_upload) {
+                if (local_exists) {
+                    delete_server_states_named(upload_name);
+                    if (!RunStateUpload(local_path, rom_id, slot, tico_slug, core,
+                                        entry.rom_path, entry.rom_size)) {
+                        all_ok = false;
+                    }
+                } else {
+                    SetStage(SyncStage::States, SyncStageState::Skipped,
+                             romm::i18n::format("sync.states.no_local_slot", {{"slot", std::to_string(slot)}}));
+                }
+                continue;
+            }
+            if (options.force_state_download) {
+                if (server_save) {
+                    if (!RunStateDownload(*server_save, local_path, rom_id, slot, tico_slug,
+                                          entry.rom_path, entry.rom_size)) {
+                        all_ok = false;
+                    }
+                } else {
+                    SetStage(SyncStage::States, SyncStageState::Skipped,
+                             romm::i18n::tr("sync.states.no_server"));
+                }
+                continue;
+            }
+
+            enum class SlotAction { Download, Upload, Skip, Prompt };
+            SlotAction action = SlotAction::Skip;
+            SaveConflictKind kind = SaveConflictKind::FirstSyncBoth;
+
+            if (!synced_before) {
+                // First sync of this slot: never overwrite anything without asking.
+                if (server_save && local_exists) {
+                    action = SlotAction::Prompt;
+                    kind = SaveConflictKind::FirstSyncBoth;
+                } else if (server_save) {
+                    action = SlotAction::Download;
+                } else if (local_exists) {
+                    action = SlotAction::Upload;
+                } else {
+                    action = SlotAction::Skip;
+                }
+            } else {
+                if (!server_save) {
+                    action = local_changed ? SlotAction::Upload : SlotAction::Skip;
+                } else if (server_changed && local_changed) {
+                    action = SlotAction::Prompt;
+                    kind = SaveConflictKind::BothNew;
+                } else if (server_changed) {
+                    action = SlotAction::Download;
+                } else if (local_changed) {
+                    action = SlotAction::Upload;
+                } else {
+                    action = SlotAction::Skip;
+                }
+            }
+
+            switch (action) {
+                case SlotAction::Download: {
+                    if (!RunStateDownload(*server_save, local_path, rom_id, slot, tico_slug,
+                                          entry.rom_path, entry.rom_size)) {
+                        all_ok = false;
+                    }
+                    break;
+                }
+                case SlotAction::Upload: {
+                    delete_server_states_named(upload_name);
+                    if (!RunStateUpload(local_path, rom_id, slot, tico_slug, core,
+                                        entry.rom_path, entry.rom_size)) {
+                        all_ok = false;
+                    }
+                    break;
+                }
+                case SlotAction::Skip: {
+                    break;
+                }
+                case SlotAction::Prompt: {
+                    SaveConflict conf;
+                    conf.active = true;
+                    conf.rom_id = rom_id;
+                    conf.kind = kind;
+                    conf.local_path = local_path;
+                    conf.local_info = local_fp;
+                    conf.server_info = server_save->file_name + "  (" + server_save->updated_at + ")";
+                    conf.server_updated_at = server_save->updated_at;
+                    conf.server_save_id = server_save->id;
+                    size_t slash = local_path.find_last_of('/');
+                    conf.target_rel_path = (slash != std::string::npos)
+                                               ? local_path.substr(slash + 1)
+                                               : local_path;
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        snapshot_.conflict = conf;
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(conflict_mutex_);
+                        conflict_pending_ = true;
+                        conflict_skipped_ = false;
+                        conflict_overwrite_local_ = true;
+                    }
+
+                    SetStage(SyncStage::States, SyncStageState::WaitingConflict,
+                             romm::i18n::tr("sync.conflict.waiting"));
+                    ScreenWakeManager::Instance().RequestUpdate();
+
+                    const ConflictAnswer answer = WaitForConflictDecision();
+                    if (answer == ConflictAnswer::Cancelled) return;
+                    if (answer == ConflictAnswer::Skipped) {
+                        SetStage(SyncStage::States, SyncStageState::Skipped,
+                                 romm::i18n::tr("sync.conflict.skipped"));
+                        break;
+                    }
+
+                    if (answer == ConflictAnswer::OverwriteLocal) {
+                        delete_server_states_named(upload_name);
+                        if (!RunStateUpload(local_path, rom_id, slot, tico_slug, core,
+                                            entry.rom_path, entry.rom_size)) {
+                            all_ok = false;
+                        }
+                    } else {
+                        if (!RunStateDownload(*server_save, local_path, rom_id, slot, tico_slug,
+                                              entry.rom_path, entry.rom_size)) {
+                            all_ok = false;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Only crown the run when nothing failed; a failed transfer must keep
+        // its Failed row visible instead of being masked by a blanket Ok.
+        if (!cancel_requested_.load() && all_ok) {
+            SetStage(SyncStage::States, SyncStageState::Ok, romm::i18n::tr("sync.states.done"));
+        }
+    }
+
     void SyncManager::ResetStages(const std::string& title, const SyncOptions& options) {
         std::lock_guard<std::mutex> lock(mutex_);
         snapshot_.title = title;
@@ -842,6 +1434,10 @@ namespace romm::model {
             // Save management runs a single stage; the progress modal renders
             // whatever stages exist, so it shows just the Saves row.
             snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
+            return;
+        }
+        if (options.states_only) {
+            snapshot_.stages.push_back({SyncStage::States, SyncStageState::Pending, ""});
             return;
         }
         snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
@@ -912,9 +1508,9 @@ namespace romm::model {
                                               ? platform_slug
                                               : games[i].platform_slug;
 
-            // Saves-only runs don't need the ROM detail: the save target is
+            // Saves/states-only runs don't need the ROM detail: the target is
             // resolved from the sync-state record inside RunGameSync.
-            if (options.saves_only) {
+            if (options.saves_only || options.states_only) {
                 GameDetail minimal;
                 minimal.rom_id = games[i].rom_id;
                 RunGameSync(minimal, game_slug, games[i].title, options);
@@ -954,6 +1550,8 @@ namespace romm::model {
         if (!config.IsValid()) {
             if (options.saves_only) {
                 SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            } else if (options.states_only) {
+                SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             } else {
                 SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
                 SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
@@ -972,7 +1570,7 @@ namespace romm::model {
             files.push_back(rf);
         }
 
-        if (!options.saves_only) {
+        if (!options.saves_only && !options.states_only) {
             if (files.size() > 1) {
                 SetStage(SyncStage::Rom, SyncStageState::Unsupported,
                          romm::i18n::tr("sync.multidisc"));
@@ -993,9 +1591,9 @@ namespace romm::model {
         std::string rom_name;
         if (!files.empty()) {
             rom_name = dl.SanitizeFilename(files.front().file_name);
-        } else if (options.saves_only) {
-            // Saves-only runs may have no file data in the detail; the sync
-            // record knows the ROM name it was synced under.
+        } else if (options.saves_only || options.states_only) {
+            // Saves/states-only runs may have no file data in the detail; the
+            // sync record knows the ROM name it was synced under.
             std::string recorded_rom_path;
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1006,7 +1604,8 @@ namespace romm::model {
             if (slash != std::string::npos) rom_name = recorded_rom_path.substr(slash + 1);
         }
         if (rom_name.empty()) {
-            SetStage(SyncStage::Saves, SyncStageState::Skipped,
+            SetStage(options.states_only ? SyncStage::States : SyncStage::Saves,
+                     SyncStageState::Skipped,
                      romm::i18n::tr("sync.rom.no_files"));
             return;
         }
@@ -1018,15 +1617,17 @@ namespace romm::model {
 
         // Tico cannot run compressed archives (7z, zip, ...) — warn the user
         // to extract the ROM (e.g. with DBI) before expecting it to launch.
-        // Saves-only runs never touch the ROM, so the warning is irrelevant.
-        if (!options.saves_only && SyncManager::IsCompressedArchive(rom_name)) {
+        // Saves/states-only runs never touch the ROM, so the warning is
+        // irrelevant.
+        if (!options.saves_only && !options.states_only &&
+            SyncManager::IsCompressedArchive(rom_name)) {
             size_t dot = rom_name.find_last_of('.');
             std::string ext = (dot != std::string::npos) ? rom_name.substr(dot) : "";
             SetWarning(romm::i18n::format("sync.warning.compressed", {{"ext", ext}}));
         }
 
         // --- Stage 1: ROM -------------------------------------------------
-        if (!options.saves_only) {
+        if (!options.saves_only && !options.states_only) {
             const RomFileEntry& file = files.front();
             SetStage(SyncStage::Rom, SyncStageState::Running, romm::i18n::tr("sync.rom.downloading"));
 
@@ -1107,15 +1708,20 @@ namespace romm::model {
             SaveSyncState();
         }
 
-        // --- Stage 2: Saves ----------------------------------------------
-        RunSavesStage(detail.rom_id, tico_slug, save_target, options);
+        // --- Stage 2: Saves / States --------------------------------------
+        if (options.states_only) {
+            const std::string state_dir = config.GetTicoStatePath(platform_slug);
+            RunStatesStage(detail.rom_id, tico_slug, state_dir, rom_base, options);
+        } else {
+            RunSavesStage(detail.rom_id, tico_slug, save_target, options);
+        }
         if (cancel_requested_.load()) {
             return;
         }
 
         // --- Stage 3: Cover ----------------------------------------------
         // --- Stage 4: Background (optional) --------------------------------
-        if (!options.saves_only) {
+        if (!options.saves_only && !options.states_only) {
             std::string raw_cover = detail.path_cover_large;
             if (raw_cover.empty()) raw_cover = detail.path_cover_small;
             if (raw_cover.empty()) {

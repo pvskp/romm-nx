@@ -19,6 +19,7 @@ namespace romm::ui {
     const char* const MenuGrid::kItemKeys[] = {
         "menu.games",
         "menu.save_data",
+        "menu.states",
         "menu.settings"
     };
 
@@ -76,7 +77,7 @@ namespace romm::ui {
 
         size_t selected_menu_idx = nav->GetSelectedMenuIdx();
 
-        // Single row of cards, centered: Games and Settings.
+        // Single row of cards, centered: Games, Save Data, States, Settings.
         s32 card_w = 360;
         s32 card_h = 320;
         s32 spacing = 50;

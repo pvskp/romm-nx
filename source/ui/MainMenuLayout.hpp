@@ -19,7 +19,7 @@ namespace romm::ui {
         std::vector<pu::sdl2::Texture> unselected_texs;
 
         // i18n keys for the dashboard cards, in navigation order.
-        static const char* const kItemKeys[3];
+        static const char* const kItemKeys[4];
 
         void InitTextures();
         void ClearTextures();
@@ -28,7 +28,9 @@ namespace romm::ui {
         MenuGrid(s32 x, s32 y, s32 w, s32 h, std::shared_ptr<romm::navigation::NavigationManager> nav);
         ~MenuGrid() override;
 
-        static constexpr size_t GetItemCount() { return 3; }
+        // Derived from the key table so adding a card can never leave it
+        // invisible (it once stayed hardcoded at 3 and swallowed Settings).
+        static constexpr size_t GetItemCount() { return sizeof(kItemKeys) / sizeof(kItemKeys[0]); }
 
         // Re-rasterises the card labels in the current language.
         void RefreshTranslations();
