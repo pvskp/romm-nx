@@ -1,6 +1,6 @@
 #include "SaveManager.hpp"
 #include "ConfigManager.hpp"
-#include "TicoCatalog.hpp"
+#include "FrontendTarget.hpp"
 #include "RommApi.hpp"
 #include "ScreenWakeManager.hpp"
 #include <switch.h>
@@ -86,8 +86,6 @@ namespace romm::model {
     }
 
     void SaveManager::RebuildLocal(const std::map<int, SyncStateEntry>& state) {
-        auto& config = ConfigManager::Instance();
-
         for (auto& g : snapshot_.games) {
             g.local_exists = false;
             g.local_path.clear();
@@ -113,15 +111,23 @@ namespace romm::model {
                 size_t dot = rom_name.find_last_of('.');
                 std::string rom_base = (dot != std::string::npos) ? rom_name.substr(0, dot) : rom_name;
                 if (!rom_base.empty()) {
-                    const std::string target = config.GetTicoSavePath(g.platform_slug) + rom_base +
-                                               ResolveTicoSaveExtension(g.tico_slug);
-                    struct stat st;
-                    if (stat(target.c_str(), &st) == 0 && st.st_size > 0) {
-                        g.local_exists = true;
-                        g.local_path = target;
-                        g.local_size = (long long)st.st_size;
-                        g.local_hash = SyncManager::ShortHash(target);
-                        g.local_modified = FormatModified(st.st_mtime);
+                    // The save folder and extension come from the active
+                    // target's catalog; the target slug recorded by the sync
+                    // (or re-resolved here) drives the extension.
+                    const std::string dir = GetSaveDirFor(active_target_, g.platform_slug);
+                    const std::string tslug = ResolvePlatformSlugFor(
+                        active_target_, g.platform_slug);
+                    if (!dir.empty()) {
+                        const std::string save_path = dir + rom_base +
+                                                      ResolveSaveExtensionFor(active_target_, tslug);
+                        struct stat st;
+                        if (stat(save_path.c_str(), &st) == 0 && st.st_size > 0) {
+                            g.local_exists = true;
+                            g.local_path = save_path;
+                            g.local_size = (long long)st.st_size;
+                            g.local_hash = SyncManager::ShortHash(save_path);
+                            g.local_modified = FormatModified(st.st_mtime);
+                        }
                     }
                 }
 
@@ -175,7 +181,7 @@ namespace romm::model {
                 g.rom_id = game.id;
                 g.title = game.title;
                 g.platform_slug = romm_slug;
-                g.tico_slug = ResolveTicoPlatformSlug(romm_slug);
+                g.target = active_target_;
                 snapshot_.games.push_back(g);
             }
             snapshot_.platform_slug = romm_slug;
@@ -187,7 +193,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(state);
+        sync.GetSyncState(active_target_, state);
         RebuildLocal(state);
 
         cancel_requested_ = false;
@@ -222,7 +228,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(state);
+        sync.GetSyncState(active_target_, state);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);

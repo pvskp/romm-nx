@@ -145,6 +145,7 @@ namespace romm::navigation {
         bool sync_opt_force_cover = false;
         bool sync_opt_background = false; // cover -> platform background
         size_t sync_opt_save_dir = 0;
+        romm::model::SyncDestination sync_opt_destination = romm::model::SyncDestination::Tico;
         // Platform-wide sync intent (triggered from the library Y-Menu).
         bool sync_bulk_pending = false;
         std::string sync_bulk_platform_slug;
@@ -285,6 +286,7 @@ namespace romm::navigation {
         bool GetSyncOptionForceCover() const { return sync_opt_force_cover; }
         bool GetSyncOptionBackground() const { return sync_opt_background; }
         size_t GetSyncOptionSaveDir() const { return sync_opt_save_dir; } // 0=auto, 1=upload, 2=download
+        romm::model::SyncDestination GetSyncOptionDestination() const { return sync_opt_destination; }
         void SetSyncOptionIdx(size_t idx) { sync_option_idx = idx; }
 
         // Platform-wide sync intent (set when opening the options from the

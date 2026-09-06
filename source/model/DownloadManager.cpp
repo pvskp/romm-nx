@@ -1760,6 +1760,16 @@ namespace romm::model {
             {"Authorization", "Bearer " + config.GetApiKey()}
         };
 
+        // The save folder may not exist yet on a fresh frontend install
+        // (RetroArch's per-core saves/<core>/ in particular) — create the
+        // parent chain or the write below fails.
+        {
+            size_t slash = final_path.find_last_of('/');
+            if (slash != std::string::npos) {
+                RomPathManager::CreateFolderIfMissing(final_path.substr(0, slash));
+            }
+        }
+
         std::cout << "[Save] Downloading rom_id=" << save.rom_id << " save_id=" << save.id
                   << " -> " << final_path << std::endl;
 
@@ -1789,6 +1799,14 @@ namespace romm::model {
         std::map<std::string, std::string> headers = {
             {"Authorization", "Bearer " + config.GetApiKey()}
         };
+
+        // Same parent-chain creation as the save path above.
+        {
+            size_t slash = final_path.find_last_of('/');
+            if (slash != std::string::npos) {
+                RomPathManager::CreateFolderIfMissing(final_path.substr(0, slash));
+            }
+        }
 
         std::cout << "[State] Downloading rom_id=" << state.rom_id << " state_id=" << state.id
                   << " -> " << final_path << std::endl;

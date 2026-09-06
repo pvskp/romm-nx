@@ -1,7 +1,7 @@
 #include "StateManager.hpp"
 #include "ConfigManager.hpp"
 #include "SyncManager.hpp"
-#include "TicoCatalog.hpp"
+#include "FrontendTarget.hpp"
 #include "RommApi.hpp"
 #include "ScreenWakeManager.hpp"
 #include <switch.h>
@@ -181,8 +181,6 @@ namespace romm::model {
     }
 
     void StateManager::RebuildLocal(const std::map<int, SyncStateEntry>& state) {
-        auto& config = ConfigManager::Instance();
-
         for (auto& g : snapshot_.games) {
             g.local_slots.clear();
             g.state_dir.clear();
@@ -194,7 +192,7 @@ namespace romm::model {
             if (it != state.end()) entry = &it->second;
 
             if (entry) {
-                g.state_dir = config.GetTicoStatePath(g.platform_slug);
+                g.state_dir = GetStateDirFor(active_target_, g.platform_slug);
                 const std::string rom_base = RecordRomBase(entry);
                 if (!rom_base.empty()) {
                     // Slot 0 is the auto-slot ("<base>.state0", or plain
@@ -254,7 +252,7 @@ namespace romm::model {
                 g.rom_id = game.id;
                 g.title = game.title;
                 g.platform_slug = romm_slug;
-                g.tico_slug = ResolveTicoPlatformSlug(romm_slug);
+                g.target = active_target_;
                 snapshot_.games.push_back(g);
             }
             snapshot_.platform_slug = romm_slug;
@@ -266,7 +264,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(state);
+        sync.GetSyncState(active_target_, state);
         RebuildLocal(state);
 
         cancel_requested_ = false;
@@ -301,7 +299,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(state);
+        sync.GetSyncState(active_target_, state);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);

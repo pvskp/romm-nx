@@ -7,6 +7,7 @@
 #include <atomic>
 #include <pthread.h>
 #include "DataModel.hpp"
+#include "FrontendTarget.hpp"
 #include "SyncManager.hpp"
 
 namespace romm::model {
@@ -31,7 +32,7 @@ namespace romm::model {
         int rom_id = 0;
         std::string title;
         std::string platform_slug; // RomM slug (paths resolve from it)
-        std::string tico_slug;
+        SyncTarget target = SyncTarget::Tico; // which frontend this view reads
 
         // Local side (disk + sync_state.json).
         bool local_exists = false;
@@ -71,6 +72,11 @@ namespace romm::model {
     public:
         static SaveManager& Instance();
 
+        // Which frontend's saves this screen reads and writes. Switching
+        // targets re-issues a Refresh from the view.
+        void SetTarget(SyncTarget target) { active_target_ = target; }
+        SyncTarget GetTarget() const { return active_target_; }
+
         // Rebuilds the platform snapshot and starts the server refresh worker.
         // While a refresh is running the call only asks the worker to park and
         // returns: re-targeting must never block the UI thread on the fetch in
@@ -99,6 +105,7 @@ namespace romm::model {
         static void* Trampoline(void* arg);
 
         mutable std::mutex mutex_;
+        SyncTarget active_target_ = SyncTarget::Tico;
         SavePlatformSnapshot snapshot_;
         std::atomic<bool> refreshing_{false};
         std::atomic<bool> cancel_requested_{false};

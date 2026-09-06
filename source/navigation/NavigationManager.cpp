@@ -216,9 +216,9 @@ namespace romm::navigation {
 
         // Pre-flight options screen: the sync has not started yet.
         if (sync_modal_mode == SyncModalMode::Options) {
-            // 0 = force ROM, 1 = force cover, 2 = cover as background,
-            // 3 = save direction, 4 = start.
-            static constexpr size_t kOptionRows = 5;
+            // 0 = destination, 1 = force ROM, 2 = force cover,
+            // 3 = cover as background, 4 = save direction, 5 = start.
+            static constexpr size_t kOptionRows = 6;
             if (keys_down & HidNpadButton_B) {
                 sync_modal_active = false;
                 sync_option_idx = 0;
@@ -228,18 +228,22 @@ namespace romm::navigation {
                 if (sync_option_idx + 1 < kOptionRows) sync_option_idx++;
             } else if ((keys_down & HidNpadButton_Left) || (keys_down & HidNpadButton_Right)) {
                 if (sync_option_idx == 0) {
-                    sync_opt_force_rom = !sync_opt_force_rom;
+                    sync_opt_destination = static_cast<romm::model::SyncDestination>(
+                        (static_cast<size_t>(sync_opt_destination) + 1) % 3);
                 } else if (sync_option_idx == 1) {
-                    sync_opt_force_cover = !sync_opt_force_cover;
+                    sync_opt_force_rom = !sync_opt_force_rom;
                 } else if (sync_option_idx == 2) {
-                    sync_opt_background = !sync_opt_background;
+                    sync_opt_force_cover = !sync_opt_force_cover;
                 } else if (sync_option_idx == 3) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 4) {
                     sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
                 }
             } else if (keys_down & HidNpadButton_A) {
-                if (sync_option_idx == 4) {
+                if (sync_option_idx == 5) {
                     // Start the sync with the chosen options.
                     romm::model::SyncOptions opts;
+                    opts.destination = sync_opt_destination;
                     opts.force_rom = sync_opt_force_rom;
                     opts.force_cover = sync_opt_force_cover;
                     opts.use_cover_as_background = sync_opt_background;
@@ -274,12 +278,15 @@ namespace romm::navigation {
                     sync_modal_mode = SyncModalMode::Progress;
                     sync_conflict_selected_idx = 0;
                 } else if (sync_option_idx == 0) {
-                    sync_opt_force_rom = !sync_opt_force_rom;
+                    sync_opt_destination = static_cast<romm::model::SyncDestination>(
+                        (static_cast<size_t>(sync_opt_destination) + 1) % 3);
                 } else if (sync_option_idx == 1) {
-                    sync_opt_force_cover = !sync_opt_force_cover;
+                    sync_opt_force_rom = !sync_opt_force_rom;
                 } else if (sync_option_idx == 2) {
-                    sync_opt_background = !sync_opt_background;
+                    sync_opt_force_cover = !sync_opt_force_cover;
                 } else if (sync_option_idx == 3) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (sync_option_idx == 4) {
                     sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
                 }
             }
@@ -327,6 +334,18 @@ namespace romm::navigation {
         save_detail_server_sel = 0;
         save_detail_action_idx = 0;
 
+        // The screen shows one frontend at a time; it starts at the configured
+        // default ("Both" resolves to Tico here, the first run target).
+        {
+            romm::model::SyncDestination def = romm::model::SyncDestination::Tico;
+            romm::model::ParseDestination(
+                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(), def);
+            romm::model::SaveManager::Instance().SetTarget(
+                def == romm::model::SyncDestination::RetroArch
+                    ? romm::model::SyncTarget::RetroArch
+                    : romm::model::SyncTarget::Tico);
+        }
+
         // Kick the first platform's refresh. If its ROMs aren't loaded yet,
         // trigger the fetch too — the view re-runs the refresh once they land.
         SelectSavePlatform();
@@ -348,6 +367,17 @@ namespace romm::navigation {
         state_detail_actions_origin = SaveDetailFocus::Local;
         state_detail_server_sel = 0;
         state_detail_action_idx = 0;
+
+        // Same default-destination resolution as the Save Data screen.
+        {
+            romm::model::SyncDestination def = romm::model::SyncDestination::Tico;
+            romm::model::ParseDestination(
+                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(), def);
+            romm::model::StateManager::Instance().SetTarget(
+                def == romm::model::SyncDestination::RetroArch
+                    ? romm::model::SyncTarget::RetroArch
+                    : romm::model::SyncTarget::Tico);
+        }
 
         // Kick the first platform's refresh. If its ROMs aren't loaded yet,
         // trigger the fetch too — the view re-runs the refresh once they land.
@@ -391,6 +421,22 @@ namespace romm::navigation {
 
         const size_t plat_count = platforms.size();
         const auto& plat = platforms[save_platform_idx < plat_count ? save_platform_idx : 0];
+
+        // L/R switches the screen's frontend (which saves are listed and
+        // where transfers land). Blocked inside the per-game view: finish or
+        // close it first so the cards can't describe one frontend's file
+        // while the header already names the other.
+        if (!save_detail_open &&
+            ((keys_down & HidNpadButton_L) || (keys_down & HidNpadButton_R))) {
+            auto& save_mgr = romm::model::SaveManager::Instance();
+            save_mgr.SetTarget(save_mgr.GetTarget() == romm::model::SyncTarget::Tico
+                                   ? romm::model::SyncTarget::RetroArch
+                                   : romm::model::SyncTarget::Tico);
+            std::cout << "[NAV] [SAVES] Target -> "
+                      << romm::model::TargetName(save_mgr.GetTarget()) << std::endl;
+            SelectSavePlatform(); // re-issues the refresh under the new target
+            return;
+        }
 
         // ---- Per-game comparison view ------------------------------------
         if (save_detail_open) {
@@ -447,7 +493,8 @@ namespace romm::navigation {
                             std::cout << "[NAV] [SAVES] Downloading server save "
                                       << save.file_name << " for rom " << save_detail_rom_id << std::endl;
                             auto& sync = romm::model::SyncManager::Instance();
-                            sync.StartSpecificSaveDownload(save_detail_rom_id, plat.slug, game->title, save);
+                            sync.StartSpecificSaveDownload(save_detail_rom_id, plat.slug, game->title, save,
+                                                           romm::model::SaveManager::Instance().GetTarget());
                             sync_modal_active = true;
                             sync_modal_mode = SyncModalMode::Progress;
                             save_rescan_pending = true;
@@ -467,6 +514,11 @@ namespace romm::navigation {
                     if (game) {
                         romm::model::SyncOptions opts;
                         opts.saves_only = true;
+                        opts.destination =
+                            (romm::model::SaveManager::Instance().GetTarget()
+                                 == romm::model::SyncTarget::Tico)
+                                ? romm::model::SyncDestination::Tico
+                                : romm::model::SyncDestination::RetroArch;
                         if (save_detail_action_idx == 1) opts.force_save_upload = true;
                         else if (save_detail_action_idx == 2) opts.force_save_download = true;
 
@@ -595,6 +647,11 @@ namespace romm::navigation {
 
                 romm::model::SyncOptions opts;
                 opts.saves_only = true;
+                opts.destination =
+                    (romm::model::SaveManager::Instance().GetTarget()
+                         == romm::model::SyncTarget::Tico)
+                        ? romm::model::SyncDestination::Tico
+                        : romm::model::SyncDestination::RetroArch;
                 if (save_action_idx == 1) opts.force_save_upload = true;
                 else if (save_action_idx == 2) opts.force_save_download = true;
 
@@ -628,6 +685,20 @@ namespace romm::navigation {
 
         const size_t plat_count = platforms.size();
         const auto& plat = platforms[state_platform_idx < plat_count ? state_platform_idx : 0];
+
+        // L/R switches the screen's frontend (which states are listed and
+        // where transfers land), mirroring the Save Data screen.
+        if (!state_detail_open &&
+            ((keys_down & HidNpadButton_L) || (keys_down & HidNpadButton_R))) {
+            auto& state_mgr = romm::model::StateManager::Instance();
+            state_mgr.SetTarget(state_mgr.GetTarget() == romm::model::SyncTarget::Tico
+                                    ? romm::model::SyncTarget::RetroArch
+                                    : romm::model::SyncTarget::Tico);
+            std::cout << "[NAV] [STATES] Target -> "
+                      << romm::model::TargetName(state_mgr.GetTarget()) << std::endl;
+            SelectStatePlatform(); // re-issues the refresh under the new target
+            return;
+        }
 
         // ---- Per-game comparison view ------------------------------------
         if (state_detail_open) {
@@ -684,7 +755,8 @@ namespace romm::navigation {
                             std::cout << "[NAV] [STATES] Downloading server state "
                                       << state.file_name << " for rom " << state_detail_rom_id << std::endl;
                             auto& sync = romm::model::SyncManager::Instance();
-                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state);
+                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state,
+                                                            romm::model::StateManager::Instance().GetTarget());
                             sync_modal_active = true;
                             sync_modal_mode = SyncModalMode::Progress;
                             state_rescan_pending = true;
@@ -704,6 +776,11 @@ namespace romm::navigation {
                     if (game) {
                         romm::model::SyncOptions opts;
                         opts.states_only = true;
+                        opts.destination =
+                            (romm::model::StateManager::Instance().GetTarget()
+                                 == romm::model::SyncTarget::Tico)
+                                ? romm::model::SyncDestination::Tico
+                                : romm::model::SyncDestination::RetroArch;
                         if (state_detail_action_idx == 1) opts.force_state_upload = true;
                         else if (state_detail_action_idx == 2) opts.force_state_download = true;
 
@@ -831,6 +908,11 @@ namespace romm::navigation {
 
                 romm::model::SyncOptions opts;
                 opts.states_only = true;
+                opts.destination =
+                    (romm::model::StateManager::Instance().GetTarget()
+                         == romm::model::SyncTarget::Tico)
+                        ? romm::model::SyncDestination::Tico
+                        : romm::model::SyncDestination::RetroArch;
                 if (state_action_idx == 1) opts.force_state_upload = true;
                 else if (state_action_idx == 2) opts.force_state_download = true;
 
@@ -1007,6 +1089,11 @@ namespace romm::navigation {
         sync_opt_force_cover = false;
         sync_opt_background = false;
         sync_opt_save_dir = 0;
+        // The destination radio starts at the configured default every time
+        // the pre-flight opens.
+        romm::model::ParseDestination(
+            romm::model::ConfigManager::Instance().GetSyncDefaultDestination(),
+            sync_opt_destination);
         sync_conflict_selected_idx = 0;
     }
 
@@ -1756,6 +1843,9 @@ namespace romm::navigation {
                             sync_opt_force_cover = false;
                             sync_opt_background = false;
                             sync_opt_save_dir = 0;
+                            romm::model::ParseDestination(
+                                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(),
+                                sync_opt_destination);
                             sync_conflict_selected_idx = 0;
                             sync_bulk_pending = false;
                             std::cout << "[NAV] [SYNC] Sync options opened for rom_id=" << rom_id << std::endl;

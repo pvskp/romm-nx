@@ -197,6 +197,34 @@ namespace romm::model {
         std::string GetTicoBackgroundPath(const std::string& romm_slug,
                                           const std::string& game_base) const;
 
+        // --- RetroArch sync paths ----------------------------------------
+        // Root of the RetroArch port on the SD card ("retroarch_base_dir",
+        // defaults to "sdmc:/RetroArch/"). Saves and states live under
+        // <base>/saves/<core>/ and <base>/states/<core>/ — per core, not per
+        // platform — so the core table in RetroArchCatalog drives them.
+        const std::string& GetRetroArchBaseDir() const { return retroarch_base_dir; }
+        void SetRetroArchBaseDir(const std::string& dir);
+
+        // ROM strategy for the RetroArch target. When true (default) the
+        // target reads and writes ROMs directly in Tico's folders — one copy
+        // on the SD, two frontends loading it. When false, ROMs are synced
+        // into their own content folder below.
+        bool RetroarchReusesTicoRoms() const { return retroarch_reuse_tico_roms; }
+        void SetRetroarchReusesTicoRoms(bool reuse) { retroarch_reuse_tico_roms = reuse; }
+
+        // Content folder used when the reuse option is off
+        // ("retroarch_roms_dir", defaults to "<retroarch base>/roms/").
+        const std::string& GetRetroArchRomsDir() const { return retroarch_roms_dir; }
+        void SetRetroArchRomsDir(const std::string& dir);
+        std::string GetRetroArchRomPath(const std::string& romm_slug) const;
+
+        // Destination picked by default in the sync pre-flight modal and by
+        // the Save/State Data screens: "tico", "retroarch" or "both"
+        // ("sync_default_destination"; FrontendTarget::ParseDestination is
+        // the single parser). Defaults to "tico".
+        const std::string& GetSyncDefaultDestination() const { return sync_default_destination; }
+        void SetSyncDefaultDestination(const std::string& dest) { sync_default_destination = dest; }
+
     private:
         ConfigManager() = default;
 
@@ -238,6 +266,12 @@ namespace romm::model {
 
         // Root of the Tico frontend. Always ends in '/'.
         std::string tico_base_dir = "sdmc:/tico/";
+
+        // Root of the RetroArch port. Always ends in '/'.
+        std::string retroarch_base_dir = "sdmc:/RetroArch/";
+        bool retroarch_reuse_tico_roms = true;
+        std::string retroarch_roms_dir = "sdmc:/RetroArch/roms/";
+        std::string sync_default_destination = "tico";
 
         // Directory holding the per-channel subdirectories; always ends in '/'.
         std::string update_base_url = "https://romm-nx.aaaoz.fr/romm-nx/";

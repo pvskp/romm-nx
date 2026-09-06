@@ -21,7 +21,14 @@ namespace romm::ui {
         pu::ui::Color state_skip(170, 170, 190, 255);
 
         s32 panel_w = 900;
-        s32 panel_h = 780; // up to four stage rows + warning banner + hint
+        // Height follows the stage-row count: a Both-destination run has up
+        // to eight rows (ROM and Saves per target plus Tico's cover and
+        // background), so rows compress and drop their message line to fit.
+        const bool compact = snap.stages.size() > 4;
+        const s32 row_h = compact ? 78 : 122;
+        s32 panel_h = 168 + (s32)snap.stages.size() * row_h + 46;
+        if (!snap.warning.empty()) panel_h += 48;
+        if (panel_h > 1010) panel_h = 1010;
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
@@ -51,7 +58,6 @@ namespace romm::ui {
         }
 
         s32 row_y0 = panel_y + 168;
-        const s32 row_h = 122;
 
         // Warning banner (compressed ROM etc.) pushes the rows down.
         if (!snap.warning.empty()) {
@@ -83,7 +89,19 @@ namespace romm::ui {
                 case romm::model::SyncStage::Background: stage_key = "sync.stage.background"; break;
                 default: break;
             }
-            pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr(stage_key), text_color);
+            // Multi-target runs repeat stages per frontend: tag each row with
+            // the destination name so the user knows which side it refers to.
+            std::string label = romm::i18n::tr(stage_key);
+            if (snap.stages.size() > 0) {
+                size_t same_stage = 0;
+                for (const auto& s : snap.stages) {
+                    if (s.stage == stage.stage) ++same_stage;
+                }
+                if (same_stage > 1) {
+                    label += std::string(" · ") + romm::model::TargetName(stage.target);
+                }
+            }
+            pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", label, text_color);
             if (tex_label) {
                 drawer->RenderTexture(tex_label, panel_x + 50, ry + 20);
                 pu::ui::render::DeleteTexture(tex_label);
@@ -107,7 +125,7 @@ namespace romm::ui {
                 pu::ui::render::DeleteTexture(tex_state);
             }
 
-            if (!stage.message.empty()) {
+            if (!stage.message.empty() && !compact) {
                 pu::sdl2::Texture tex_msg = pu::ui::render::RenderText("Ubuntu@22", Truncate(stage.message, 70), dim_color);
                 if (tex_msg) {
                     drawer->RenderTexture(tex_msg, panel_x + 50, ry + 62);
@@ -133,7 +151,7 @@ namespace romm::ui {
         pu::ui::Color highlight(230, 199, 167, 255);
 
         s32 panel_w = 900;
-        s32 panel_h = 800; // five option rows + warning banner + hint
+        s32 panel_h = 900; // six option rows + warning banner + hint
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
@@ -204,9 +222,15 @@ namespace romm::ui {
         const bool force_cover = nav->GetSyncOptionForceCover();
         const bool background = nav->GetSyncOptionBackground();
         const size_t save_dir = nav->GetSyncOptionSaveDir();
+        const romm::model::SyncDestination dest = nav->GetSyncOptionDestination();
 
         struct Row { const char* key; std::string value; };
-        const Row rows[5] = {
+        std::string dest_label = romm::model::DestinationName(dest);
+        if (dest == romm::model::SyncDestination::Both) {
+            dest_label = romm::i18n::tr("sync.destination.both");
+        }
+        const Row rows[6] = {
+            { "sync.option.destination", dest_label },
             { "sync.option.force_rom",
               force_rom ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
             { "sync.option.force_cover",
@@ -221,10 +245,10 @@ namespace romm::ui {
         };
 
         const s32 row_h = 92;
-        for (size_t i = 0; i < 5; ++i) {
+        for (size_t i = 0; i < 6; ++i) {
             const s32 ry = body_y + (s32)i * (row_h + 12);
             const bool focused = (i == sel);
-            const bool is_start = (i == 4);
+            const bool is_start = (i == 5);
 
             pu::ui::Color border = focused ? highlight : pu::ui::Color(45, 50, 62, 255);
             pu::ui::Color bg = focused ? pu::ui::Color(85, 63, 152, 255)

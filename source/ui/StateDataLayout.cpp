@@ -175,10 +175,16 @@ namespace romm::ui {
             drawer->RenderTexture(tex_title, 60, 40);
             pu::ui::render::DeleteTexture(tex_title);
         }
-        const std::string subtitle = romm::i18n::format("save_data.platform_of", {
-            {"name", plat.name},
-            {"count", std::to_string(game_count)}
-        });
+        // The subtitle carries the active frontend chip: this screen reads
+        // and writes one frontend at a time (L/R switches it).
+        const std::string subtitle =
+            romm::i18n::format("save_data.platform_of", {
+                {"name", plat.name},
+                {"count", std::to_string(game_count)}
+            }) +
+            "   ·   " +
+            romm::model::TargetName(romm::model::StateManager::Instance().GetTarget()) +
+            "   (" + romm::i18n::tr("save_data.target_toggle") + ")";
         pu::sdl2::Texture tex_sub = pu::ui::render::RenderText("Ubuntu@24", subtitle, dim_color);
         if (tex_sub) {
             drawer->RenderTexture(tex_sub, 60, 100);
@@ -805,8 +811,15 @@ namespace romm::ui {
                     auto& states = romm::model::StateManager::Instance();
                     if (!states.IsRefreshing()) {
                         const auto snap = states.GetSnapshot();
+                        // A frontend switch keeps the same platform and game
+                        // list, so the snapshot's per-game target is what
+                        // tells a parked L/R toggle apart from fresh data.
+                        const bool target_mismatch =
+                            !snap.games.empty() &&
+                            snap.games.front().target != states.GetTarget();
                         if (snap.games.size() != plat.games.size() ||
-                            snap.platform_slug != plat.slug) {
+                            snap.platform_slug != plat.slug ||
+                            target_mismatch) {
                             states.Refresh(plat.games, plat.slug);
                         }
                     }

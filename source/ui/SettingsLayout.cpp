@@ -200,7 +200,7 @@ namespace romm::ui {
             "settings.category.general",
             "settings.category.theme",
             "settings.category.connection",
-            "settings.category.rom_paths",
+            "settings.category.paths",
             "settings.category.advanced",
             "settings.category.updates",
             "settings.category.debug"
@@ -496,10 +496,24 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.connection.api_key"), config.GetMaskedApiKey()});
             options.push_back({romm::i18n::tr("settings.connection.test"), connection_test_status, true});
         }
-        else if (active_cat == 3) { // ROM Paths
-            // One configurable base directory; every system installs to
-            // <base>/roms/<system>/. Value is a config value shown as-is.
-            options.push_back({romm::i18n::tr("settings.rom_paths.base_dir"),
+        else if (active_cat == 3) { // Paths & Sync
+            // One menu for everything that lives on the SD: where syncs land
+            // (destination + per-frontend folders) and where plain downloads
+            // go. Values are config values shown as-is.
+            romm::model::SyncDestination def;
+            romm::model::ParseDestination(config.GetSyncDefaultDestination(), def);
+            std::string dest_label = romm::model::DestinationName(def);
+            if (def == romm::model::SyncDestination::Both) {
+                dest_label = romm::i18n::tr("sync.destination.both");
+            }
+            options.push_back({romm::i18n::tr("settings.paths.default_destination"), dest_label});
+            options.push_back({romm::i18n::tr("settings.paths.tico_base_dir"),
+                               truncatePath(config.GetTicoBaseDir()), true});
+            options.push_back({romm::i18n::tr("settings.paths.retroarch_base_dir"),
+                               truncatePath(config.GetRetroArchBaseDir()), true});
+            options.push_back({romm::i18n::tr("settings.paths.reuse_tico_roms"),
+                               on_off(config.RetroarchReusesTicoRoms())});
+            options.push_back({romm::i18n::tr("settings.paths.downloads_base_dir"),
                                truncatePath(config.GetRomsBaseDir()), true});
         }
         else if (active_cat == 4) { // Advanced
@@ -684,7 +698,7 @@ namespace romm::ui {
                 }
             }
 
-            if (active_cat == 5) {
+            if (active_cat == 6) {
                 // Update info panel: everything read-only, in the space left
                 // under the rows. Its top follows the row count and every line
                 // is gated on a hard bottom limit, so it can neither sit on top
@@ -867,11 +881,6 @@ namespace romm::ui {
         auto nav = nav_mgr.lock();
         if (!nav) return;
 
-        if (nav->GetSelectedSettingsCategoryIdx() == 3 && focus != SettingsFocusArea::CategoryList) {
-            hint_text->SetText(romm::i18n::tr("hint.settings.rompath.base"));
-            return;
-        }
-
         if (focus == SettingsFocusArea::CategoryList) {
             hint_text->SetText(romm::i18n::tr("hint.settings.categories"));
         } else {
@@ -1017,8 +1026,33 @@ namespace romm::ui {
                 }
             }
         }
-        else if (cat_idx == 3) { // ROM Paths (base directory)
+        else if (cat_idx == 3) { // Paths & Sync
             if (opt_idx == 0) {
+                // Default destination: Tico -> RetroArch -> Both -> Tico.
+                romm::model::SyncDestination dest;
+                romm::model::ParseDestination(config.GetSyncDefaultDestination(), dest);
+                dest = static_cast<romm::model::SyncDestination>(
+                    (static_cast<size_t>(dest) + 1) % 3);
+                config.SetSyncDefaultDestination(romm::model::DestinationId(dest));
+                config.Save();
+            } else if (opt_idx == 1) {
+                EditTicoBaseDirectory();
+            } else if (opt_idx == 2) {
+                std::string current = config.GetRetroArchBaseDir();
+                std::string val = romm::navigation::NavigationManager::ShowKeyboard(
+                    romm::i18n::tr("keyboard.retroarch_dir.header"),
+                    romm::i18n::format("keyboard.retroarch_dir.subtext", {{"path", current}}),
+                    current);
+                if (!val.empty() && val != current) {
+                    if (romm::model::RomPathManager::ValidatePath(val)) {
+                        config.SetRetroArchBaseDir(val);
+                        config.Save();
+                    }
+                }
+            } else if (opt_idx == 3) {
+                config.SetRetroarchReusesTicoRoms(!config.RetroarchReusesTicoRoms());
+                config.Save();
+            } else if (opt_idx == 4) {
                 EditBaseDirectory();
             }
         }
@@ -1236,7 +1270,7 @@ namespace romm::ui {
             case 0: return 8; // General
             case 1: return 7; // Theme
             case 2: return 3; // Connection
-            case 3: return 1; // ROM Paths (base directory)
+            case 3: return 5; // Paths & Sync (destination, Tico, RA, reuse ROMs, downloads)
             case 4: return 7; // Advanced
             case 5: { // Updates
                 size_t count = 3; // Channel, Check on startup, Check for updates
@@ -1276,6 +1310,26 @@ namespace romm::ui {
                 std::cout << "[ROM_PATH] base dir=" << config.GetRomsBaseDir() << std::endl;
             } else {
                 std::cout << "[ROM_PATH] Invalid base dir: " << val << std::endl;
+            }
+        }
+    }
+
+    void SettingsLayout::EditTicoBaseDirectory() {
+        auto& config = romm::model::ConfigManager::Instance();
+
+        std::string current = config.GetTicoBaseDir();
+        std::string val = romm::navigation::NavigationManager::ShowKeyboard(
+            romm::i18n::tr("keyboard.tico_dir.header"),
+            romm::i18n::format("keyboard.tico_dir.subtext", {{"path", current}}),
+            current);
+        if (!val.empty() && val != current) {
+            if (romm::model::RomPathManager::ValidatePath(val)) {
+                config.SetTicoBaseDir(val);
+                romm::model::RomPathManager::CreateFolderIfMissing(config.GetTicoBaseDir());
+                config.Save();
+                std::cout << "[SYNC] tico base dir=" << config.GetTicoBaseDir() << std::endl;
+            } else {
+                std::cout << "[SYNC] Invalid tico base dir: " << val << std::endl;
             }
         }
     }

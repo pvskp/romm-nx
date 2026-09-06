@@ -148,6 +148,7 @@ namespace romm::ui {
         // persists the new base, where every system installs under
         // <base>/roms/<system>/.
         void EditBaseDirectory();
+        void EditTicoBaseDirectory();
 
         PU_SMART_CTOR(SettingsLayout)
     };

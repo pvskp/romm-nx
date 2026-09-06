@@ -3,6 +3,8 @@
 #include "JsonUtil.hpp"
 #include "DataModel.hpp"
 #include "TicoCatalog.hpp"
+#include "RetroArchCatalog.hpp"
+#include "FrontendTarget.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdio>
 #include <iostream>
@@ -164,6 +166,24 @@ namespace romm::model {
                                                      const std::string& game_base) const {
         return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) +
                "/" + game_base + ".jpg";
+    }
+
+    void ConfigManager::SetRetroArchBaseDir(const std::string& dir) {
+        retroarch_base_dir = dir;
+        if (!retroarch_base_dir.empty() && retroarch_base_dir.back() != '/') {
+            retroarch_base_dir += "/";
+        }
+    }
+
+    void ConfigManager::SetRetroArchRomsDir(const std::string& dir) {
+        retroarch_roms_dir = dir;
+        if (!retroarch_roms_dir.empty() && retroarch_roms_dir.back() != '/') {
+            retroarch_roms_dir += "/";
+        }
+    }
+
+    std::string ConfigManager::GetRetroArchRomPath(const std::string& romm_slug) const {
+        return retroarch_roms_dir + ResolveRetroArchPlatformSlug(romm_slug) + "/";
     }
 
     bool ConfigManager::Load() {
@@ -361,6 +381,30 @@ namespace romm::model {
             }
         }
 
+        // RetroArch target settings. All absent on configs written before
+        // this feature — the constructor defaults stand (reuse Tico's ROM
+        // folders, base "sdmc:/RetroArch/").
+        std::string ra_dir;
+        if (jsonExtractString(content, "retroarch_base_dir", ra_dir) && !ra_dir.empty()) {
+            SetRetroArchBaseDir(ra_dir);
+            if (!romm::model::RomPathManager::ValidatePath(retroarch_base_dir)) {
+                retroarch_base_dir = "sdmc:/RetroArch/";
+            }
+        }
+        jsonExtractBool(content, "retroarch_reuse_tico_roms", retroarch_reuse_tico_roms);
+        std::string ra_roms;
+        if (jsonExtractString(content, "retroarch_roms_dir", ra_roms) && !ra_roms.empty()) {
+            SetRetroArchRomsDir(ra_roms);
+        }
+        // Unknown tokens fall back to the constructor default via ParseDestination.
+        std::string dest_str;
+        if (jsonExtractString(content, "sync_default_destination", dest_str)) {
+            SyncDestination parsed;
+            if (ParseDestination(dest_str, parsed)) {
+                sync_default_destination = DestinationId(parsed);
+            }
+        }
+
         is_valid = true;
         error_message = "";
 
@@ -425,6 +469,10 @@ namespace romm::model {
         content += "  },\n";
         content += "  \"roms_base_dir\": \"" + roms_base_dir + "\",\n";
         content += "  \"tico_base_dir\": \"" + tico_base_dir + "\",\n";
+        content += "  \"retroarch_base_dir\": \"" + retroarch_base_dir + "\",\n";
+        content += "  \"retroarch_reuse_tico_roms\": " + std::string(retroarch_reuse_tico_roms ? "true" : "false") + ",\n";
+        content += "  \"retroarch_roms_dir\": \"" + retroarch_roms_dir + "\",\n";
+        content += "  \"sync_default_destination\": \"" + sync_default_destination + "\",\n";
         content += "  \"cache\": {\n";
         content += "    \"auto_clear_enabled\": " + std::string(auto_clear_enabled ? "true" : "false") + ",\n";
         content += "    \"max_size_mb\": " + std::to_string(max_size_mb) + ",\n";
