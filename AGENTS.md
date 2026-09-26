@@ -20,10 +20,17 @@ already installed on in the path stored in `DEVKITPRO`, so a plain build works
 without extra setup:
 
 ```
-make            # cross-compiles and links build/romm-nx.nro
-make -j$(nproc) # parallel build
-make clean      # remove build/ and the .nro/.elf/.nacp artifacts
+make -j$(nproc)                # default: Tico flavor -> build-tico/romm-nx-tico.nro
+make FRONTEND=retroarch -j$(nproc)  # RetroArch flavor -> build-retroarch/romm-nx-retroarch.nro
+make clean                     # remove both build dirs and all .nro/.elf/.nacp artifacts
 ```
+
+The build serves exactly one frontend per flavor (compile-time:
+`ROMM_FRONTEND_TICO` / `ROMM_FRONTEND_RETROARCH`), selected through
+`source/model/FrontendProfile.hpp`. Each flavor only compiles its own catalog
+and frontend profile translation unit, so neither build contains the other
+frontend's code or folders. Run BOTH flavors before committing a build-affecting
+change.
 
 The project uses C++20 (`-std=gnu++20`) with exceptions and RTTI disabled
 (`-fno-rtti -fno-exceptions`), so new code must not rely on RTTI (no

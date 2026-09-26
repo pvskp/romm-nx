@@ -43,28 +43,6 @@ namespace romm::ui {
         CoverCacheKey small_key;
     };
 
-    enum class DownloadActionState {
-        Download,
-        AddToQueue,
-        Queued,
-        Downloading,
-        Failed,
-        Uninstall
-    };
-
-    // Derives which action the A button should perform for a ROM, from install
-    // state plus the download queue. Free function rather than a DetailCard
-    // method because the Detail *view mode* panel in the library needs the same
-    // answer, and two copies of this ladder would drift the moment one of the
-    // DownloadState cases changed.
-    //
-    // Requires the ROM's GameDetail (for the multi-disc install identity);
-    // returns Download when detail is null, which is the safe default for a
-    // panel still waiting on its debounced fetch.
-    DownloadActionState ComputeDownloadActionState(int rom_id,
-                                                   const std::string& platform_slug,
-                                                   const romm::model::GameDetail* detail);
-
     struct DetailGameContext {
         int rom_id = -1;
         std::string platform_name;
@@ -92,26 +70,7 @@ namespace romm::ui {
         pu::sdl2::Texture cover_placeholder_tex = nullptr;
         pu::sdl2::Texture loading_tex = nullptr;
 
-        pu::sdl2::Texture tex_btn_download = nullptr;
-        pu::sdl2::Texture tex_btn_preparing = nullptr;
-        pu::sdl2::Texture tex_btn_downloaded = nullptr;
-        pu::sdl2::Texture tex_btn_failed = nullptr;
-        pu::sdl2::Texture tex_btn_unsupported = nullptr;
-        
-        pu::sdl2::Texture tex_btn_uninstall = nullptr;
-        pu::sdl2::Texture tex_btn_confirm_uninstall = nullptr;
-        pu::sdl2::Texture tex_btn_add_to_queue = nullptr;
-        pu::sdl2::Texture tex_btn_remove_from_queue = nullptr;
-
         pu::sdl2::Texture tex_btn_sync = nullptr;
-        
-        pu::sdl2::Texture dynamic_download_tex = nullptr;
-        std::string current_dynamic_text;
-        bool file_exists_checked = false;
-        bool final_file_exists = false;
-        bool part_file_exists = false;
-        int checked_rom_id = -1;
-        DownloadActionState current_action_state = DownloadActionState::Download;
 
         size_t cached_plat_idx = 999999;
         CoverProfile currentCoverProfile;
@@ -188,14 +147,8 @@ namespace romm::ui {
         s32 GetWidth() override { return w; }
         s32 GetHeight() override { return h; }
 
-        bool FinalFileExists() const { return final_file_exists; }
-        bool PartFileExists() const { return part_file_exists; }
-
         void OnRender(pu::ui::render::Renderer::Ref &drawer, const s32 x, const s32 y) override;
         void OnInput(const u64 keys_down, const u64 keys_up, const u64 keys_held, const pu::ui::TouchPoint touch_pos) override;
-
-        DownloadActionState GetActionState() const { return current_action_state; }
-        void ForceRefresh() { checked_rom_id = -1; }
 
         DetailCoverExpectation& GetExpectedIdentity() { return expected_identity; }
         pu::sdl2::Texture GetCoverTexture() { return cover_tex; }
@@ -216,7 +169,6 @@ namespace romm::ui {
         pu::ui::elm::TextBlock::Ref desc_title_text;
         pu::ui::elm::TextBlock::Ref desc_text;
         pu::ui::elm::TextBlock::Ref trailer_title_text;
-        pu::ui::elm::TextBlock::Ref download_status_text;
         pu::ui::elm::TextBlock::Ref hint_text;
 
         int descriptionScrollOffset = 0;
@@ -233,7 +185,6 @@ namespace romm::ui {
         void OnSelectionUpdated();
         void RefreshTranslations();
         void ScrollDescription(int direction);
-        void UpdateDownloadStatus();
         void UpdateFooterHints();
         std::shared_ptr<DetailCard> GetCard() { return card; }
 

@@ -21,9 +21,9 @@ namespace romm::ui {
         pu::ui::Color state_skip(170, 170, 190, 255);
 
         s32 panel_w = 900;
-        // Height follows the stage-row count: a Both-destination run has up
-        // to eight rows (ROM and Saves per target plus Tico's cover and
-        // background), so rows compress and drop their message line to fit.
+        // Height follows the stage-row count. Every stage exists exactly once
+        // (one frontend per build); a full Tico sync shows up to four rows
+        // (ROM, Saves, Cover, Background).
         const bool compact = snap.stages.size() > 4;
         const s32 row_h = compact ? 78 : 122;
         s32 panel_h = 168 + (s32)snap.stages.size() * row_h + 46;
@@ -89,18 +89,8 @@ namespace romm::ui {
                 case romm::model::SyncStage::Background: stage_key = "sync.stage.background"; break;
                 default: break;
             }
-            // Multi-target runs repeat stages per frontend: tag each row with
-            // the destination name so the user knows which side it refers to.
+            // One row per stage, always for this build's single frontend.
             std::string label = romm::i18n::tr(stage_key);
-            if (snap.stages.size() > 0) {
-                size_t same_stage = 0;
-                for (const auto& s : snap.stages) {
-                    if (s.stage == stage.stage) ++same_stage;
-                }
-                if (same_stage > 1) {
-                    label += std::string(" · ") + romm::model::TargetName(stage.target);
-                }
-            }
             pu::sdl2::Texture tex_label = pu::ui::render::RenderText("Orbitron@30", label, text_color);
             if (tex_label) {
                 drawer->RenderTexture(tex_label, panel_x + 50, ry + 20);
@@ -150,8 +140,13 @@ namespace romm::ui {
         pu::ui::Color dim_color(190, 180, 225, 255);
         pu::ui::Color highlight(230, 199, 167, 255);
 
+        // Option-row layout mirrors NavigationManager's pre-flight handler:
+        // Tico shows force ROM / force cover / background / save direction /
+        // start; RetroArch (no cover features) shows force ROM / save
+        // direction / start.
+        constexpr size_t kRows = romm::model::frontend::kHasCoverSync ? 5 : 3;
         s32 panel_w = 900;
-        s32 panel_h = 900; // six option rows + warning banner + hint
+        s32 panel_h = 300 + (s32)kRows * 104; // option rows + hint
         s32 panel_x = (1920 - panel_w) / 2;
         s32 panel_y = (1080 - panel_h) / 2;
 
@@ -198,7 +193,10 @@ namespace romm::ui {
                 }
             }
         }
-        const bool compressed = !rom_name.empty() &&
+        // Compressed-ROM warning only makes sense per game (single mode) and
+        // on the Tico flavor (RetroArch cores can usually load archives).
+        const bool compressed = romm::model::frontend::kIsTico && !bulk &&
+                                !rom_name.empty() &&
                                 romm::model::SyncManager::IsCompressedArchive(rom_name);
         s32 body_y = panel_y + 120;
         if (compressed) {
@@ -222,33 +220,31 @@ namespace romm::ui {
         const bool force_cover = nav->GetSyncOptionForceCover();
         const bool background = nav->GetSyncOptionBackground();
         const size_t save_dir = nav->GetSyncOptionSaveDir();
-        const romm::model::SyncDestination dest = nav->GetSyncOptionDestination();
 
+        // Row order mirrors NavigationManager's pre-flight handler. Tico
+        // offers the cover rows; the RetroArch build skips them.
         struct Row { const char* key; std::string value; };
-        std::string dest_label = romm::model::DestinationName(dest);
-        if (dest == romm::model::SyncDestination::Both) {
-            dest_label = romm::i18n::tr("sync.destination.both");
+        std::vector<Row> rows;
+        rows.push_back({ "sync.option.force_rom",
+                         force_rom ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") });
+        if (romm::model::frontend::kHasCoverSync) {
+            rows.push_back({ "sync.option.force_cover",
+                             force_cover ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") });
+            rows.push_back({ "sync.option.background",
+                             background ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") });
         }
-        const Row rows[6] = {
-            { "sync.option.destination", dest_label },
-            { "sync.option.force_rom",
-              force_rom ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
-            { "sync.option.force_cover",
-              force_cover ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
-            { "sync.option.background",
-              background ? romm::i18n::tr("sync.option.on") : romm::i18n::tr("sync.option.off") },
-            { "sync.option.saves",
-              (save_dir == 1) ? romm::i18n::tr("sync.option.saves.upload")
-              : (save_dir == 2) ? romm::i18n::tr("sync.option.saves.download")
-              :                  romm::i18n::tr("sync.option.saves.auto") },
-            { "sync.option.start", "" }
-        };
+        rows.push_back({ "sync.option.saves",
+                         (save_dir == 1) ? romm::i18n::tr("sync.option.saves.upload")
+                         : (save_dir == 2) ? romm::i18n::tr("sync.option.saves.download")
+                         :                  romm::i18n::tr("sync.option.saves.auto") });
+        rows.push_back({ "sync.option.start", "" });
+        const size_t kStartRow = rows.size() - 1;
 
         const s32 row_h = 92;
-        for (size_t i = 0; i < 6; ++i) {
+        for (size_t i = 0; i < rows.size(); ++i) {
             const s32 ry = body_y + (s32)i * (row_h + 12);
             const bool focused = (i == sel);
-            const bool is_start = (i == 5);
+            const bool is_start = (i == kStartRow);
 
             pu::ui::Color border = focused ? highlight : pu::ui::Color(45, 50, 62, 255);
             pu::ui::Color bg = focused ? pu::ui::Color(85, 63, 152, 255)

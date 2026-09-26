@@ -41,7 +41,6 @@ namespace romm::model {
             std::string platform_slug;
             std::string title;
             SaveEntry save;
-            SyncTarget target = SyncTarget::Tico;
         };
 
         // One specific server state to pull (State Data screen).
@@ -50,7 +49,6 @@ namespace romm::model {
             std::string platform_slug;
             std::string title;
             SaveEntry state;
-            SyncTarget target = SyncTarget::Tico;
         };
 
         std::string StripExtension(const std::string& filename) {
@@ -207,14 +205,14 @@ namespace romm::model {
     void* SyncManager::SpecificSaveTrampoline(void* arg) {
         std::unique_ptr<SpecificSaveJob> job(static_cast<SpecificSaveJob*>(arg));
         SyncManager::Instance().SpecificSaveWorker(job->rom_id, job->platform_slug,
-                                                   job->title, job->save, job->target);
+                                                   job->title, job->save);
         return nullptr;
     }
 
     void* SyncManager::SpecificStateTrampoline(void* arg) {
         std::unique_ptr<SpecificStateJob> job(static_cast<SpecificStateJob*>(arg));
         SyncManager::Instance().SpecificStateWorker(job->rom_id, job->platform_slug,
-                                                    job->title, job->state, job->target);
+                                                    job->title, job->state);
         return nullptr;
     }
 
@@ -288,11 +286,47 @@ namespace romm::model {
 
     void SyncManager::LoadSyncState() {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        sync_state_[0].clear();
-        sync_state_[1].clear();
+        sync_state_.clear();
 
-        std::ifstream file(kSyncStatePath);
-        if (!file.is_open()) return;
+        const std::string path = std::string(frontend::AppDir()) + "/sync_state.json";
+        std::ifstream file(path);
+        if (!file.is_open()) {
+            // Migration from the pre-split builds: the old app kept one
+            // sync_state.json with per-target entries at the old install
+            // root. When this build has no state of its own yet, adopt the
+            // entries that belong to it so no sync anchors are lost.
+            std::ifstream legacy("sdmc:/switch/romm-nx/sync_state.json");
+            if (!legacy.is_open()) return;
+            std::string legacy_content((std::istreambuf_iterator<char>(legacy)), std::istreambuf_iterator<char>());
+            legacy.close();
+            size_t pos = 0;
+            while ((pos = legacy_content.find("{", pos)) != std::string::npos) {
+                size_t end_pos = FindJsonObjectEnd(legacy_content, pos);
+                if (end_pos == std::string::npos) break;
+                std::string block = legacy_content.substr(pos, end_pos - pos + 1);
+                std::string target_token;
+                if (jsonExtractString(block, "target", target_token) &&
+                    target_token != frontend::Id()) {
+                    pos = end_pos + 1;
+                    continue;
+                }
+                SyncStateEntry entry;
+                if (jsonExtractInt(block, "rom_id", entry.rom_id) && entry.rom_id != 0) {
+                    jsonExtractString(block, "platform", entry.platform);
+                    jsonExtractString(block, "rom_path", entry.rom_path);
+                    jsonExtractLongLong(block, "rom_size", entry.rom_size);
+                    jsonExtractString(block, "save_local_fingerprint", entry.save_local_fingerprint);
+                    jsonExtractInt(block, "server_save_id", entry.server_save_id);
+                    jsonExtractString(block, "server_save_updated_at", entry.server_save_updated_at);
+                    jsonExtractLongLong(block, "cover_size", entry.cover_size);
+                    sync_state_[entry.rom_id] = entry;
+                }
+                pos = end_pos + 1;
+            }
+            std::cout << "[SYNC] Adopted legacy sync-state entries="
+                      << sync_state_.size() << " for frontend \"" << frontend::Id() << "\"" << std::endl;
+            return;
+        }
         std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         file.close();
 
@@ -311,15 +345,6 @@ namespace romm::model {
                 jsonExtractInt(block, "server_save_id", entry.server_save_id);
                 jsonExtractString(block, "server_save_updated_at", entry.server_save_updated_at);
                 jsonExtractLongLong(block, "cover_size", entry.cover_size);
-
-                // "target": which frontend this record belongs to. Entries
-                // from before the field existed were necessarily Tico's —
-                // that is the whole migration.
-                std::string target_token;
-                SyncTarget target = SyncTarget::Tico;
-                if (jsonExtractString(block, "target", target_token)) {
-                    ParseTarget(target_token, target);
-                }
 
                 // "state_slots": {"1": {"id":..., "updated_at":..., "fingerprint":...}, ...}
                 size_t slots_key = block.find("\"state_slots\"");
@@ -353,19 +378,18 @@ namespace romm::model {
                     }
                 }
 
-                sync_state_[static_cast<size_t>(target)][entry.rom_id] = entry;
+                sync_state_[entry.rom_id] = entry;
             }
             pos = end_pos + 1;
         }
-        std::cout << "[SYNC] Loaded sync state entries="
-                  << sync_state_[0].size() + sync_state_[1].size() << std::endl;
+        std::cout << "[SYNC] Loaded sync state entries=" << sync_state_.size() << std::endl;
     }
 
     void SyncManager::SaveSyncState() {
         std::lock_guard<std::mutex> lock(state_mutex_);
 
         mkdir("sdmc:/switch", 0777);
-        mkdir("sdmc:/switch/romm-nx", 0777);
+        mkdir(frontend::AppDir(), 0777);
 
         // Every value here is a path or token, but a game folder containing a
         // quote would otherwise break the file.
@@ -382,16 +406,13 @@ namespace romm::model {
 
         std::string json = "[\n";
         bool first = true;
-        for (size_t t = 0; t < 2; ++t) {
-            const SyncTarget target = static_cast<SyncTarget>(t);
-            for (const auto& pair : sync_state_[t]) {
-                const SyncStateEntry& e = pair.second;
-                if (!first) json += ",\n";
-                first = false;
-                json += "  {";
-                json += "\"rom_id\": " + std::to_string(e.rom_id);
-                json += ", \"target\": \"" + std::string(TargetId(target)) + "\"";
-                json += ", \"platform\": \"" + escape(e.platform) + "\"";
+        for (const auto& pair : sync_state_) {
+            const SyncStateEntry& e = pair.second;
+            if (!first) json += ",\n";
+            first = false;
+            json += "  {";
+            json += "\"rom_id\": " + std::to_string(e.rom_id);
+            json += ", \"platform\": \"" + escape(e.platform) + "\"";
             json += ", \"rom_path\": \"" + escape(e.rom_path) + "\"";
             json += ", \"rom_size\": " + std::to_string(e.rom_size);
             json += ", \"save_local_fingerprint\": \"" + escape(e.save_local_fingerprint) + "\"";
@@ -410,19 +431,18 @@ namespace romm::model {
             }
             json += "}";
             json += "}";
-            }
         }
         json += "\n]\n";
 
-        FILE* f = fopen(kSyncStatePath, "w");
+        const std::string path = std::string(frontend::AppDir()) + "/sync_state.json";
+        FILE* f = fopen(path.c_str(), "w");
         if (!f) {
-            std::cerr << "[SYNC] Could not write " << kSyncStatePath << std::endl;
+            std::cerr << "[SYNC] Could not write " << path << std::endl;
             return;
         }
         fwrite(json.c_str(), 1, json.size(), f);
         fclose(f);
-        std::cout << "[SYNC] Saved sync state entries="
-                  << sync_state_[0].size() + sync_state_[1].size() << std::endl;
+        std::cout << "[SYNC] Saved sync state entries=" << sync_state_.size() << std::endl;
     }
 
     void SyncManager::StartSync(const GameDetail& detail,
@@ -469,9 +489,9 @@ namespace romm::model {
                 snapshot_.rom_id = detail.rom_id;
                 snapshot_.platform_slug = platform_slug;
                 snapshot_.title = title;
-                snapshot_.stages.push_back({SyncStage::Rom, SyncTarget::Tico, SyncStageState::Failed,
+                snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Failed,
                                             romm::i18n::tr("sync.error.thread")});
-                snapshot_.stages.push_back({SyncStage::Saves, SyncTarget::Tico, SyncStageState::Failed,
+                snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Failed,
                                             romm::i18n::tr("sync.error.thread")});
             }
             return;
@@ -528,9 +548,9 @@ namespace romm::model {
                 snapshot_.bulk_mode = true;
                 snapshot_.bulk_total = (int)games.size();
                 snapshot_.platform_name = platform_name;
-                snapshot_.stages.push_back({SyncStage::Rom, SyncTarget::Tico, SyncStageState::Failed,
+                snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Failed,
                                             romm::i18n::tr("sync.error.thread")});
-                snapshot_.stages.push_back({SyncStage::Saves, SyncTarget::Tico, SyncStageState::Failed,
+                snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Failed,
                                             romm::i18n::tr("sync.error.thread")});
             }
             return;
@@ -541,8 +561,7 @@ namespace romm::model {
     }
 
     void SyncManager::StartSpecificSaveDownload(int rom_id, const std::string& platform_slug,
-                                                const std::string& title, const SaveEntry& save,
-                                                SyncTarget target) {
+                                                const std::string& title, const SaveEntry& save) {
         if (worker_running_.load()) {
             std::cout << "[SYNC] Already running, ignoring specific save download for rom_id="
                       << rom_id << std::endl;
@@ -564,7 +583,6 @@ namespace romm::model {
         job->platform_slug = platform_slug;
         job->title = title;
         job->save = save;
-        job->target = target;
 
         worker_running_ = true;
 
@@ -581,12 +599,11 @@ namespace romm::model {
         }
         thread_started_ = true;
         std::cout << "[SYNC] Started specific save download rom_id=" << rom_id
-                  << " save_id=" << save.id << " target=" << TargetId(target) << std::endl;
+                  << " save_id=" << save.id << std::endl;
     }
 
     void SyncManager::SpecificSaveWorker(int rom_id, const std::string& platform_slug,
-                                         const std::string& title, const SaveEntry& save,
-                                         SyncTarget target) {
+                                         const std::string& title, const SaveEntry& save) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             snapshot_ = SyncSnapshot();
@@ -604,15 +621,12 @@ namespace romm::model {
 
         // Resolve the save target from the sync-state record (the ROM name
         // the game was synced under).
-        std::string target_slug;
         std::string rom_path;
         long long rom_size = 0;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            const auto& map = StateMap(target);
-            auto it = map.find(rom_id);
-            if (it != map.end()) {
-                target_slug = it->second.platform;
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
                 rom_path = it->second.rom_path;
                 rom_size = it->second.rom_size;
             }
@@ -625,8 +639,8 @@ namespace romm::model {
         const std::string rom_base = StripExtension(rom_name);
         std::string save_target;
         if (!rom_base.empty()) {
-            save_target = GetSaveDirFor(target, platform_slug) + rom_base +
-                          ResolveSaveExtensionFor(target, target_slug);
+            save_target = frontend::GetSavesDir(platform_slug) + rom_base +
+                          frontend::ResolveSaveExtension(platform_slug);
         }
 
         if (cancel_requested_.load()) {
@@ -634,19 +648,19 @@ namespace romm::model {
             return;
         }
         if (save_target.empty()) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Failed,
+            SetStage(SyncStage::Saves, SyncStageState::Failed,
                      romm::i18n::tr("sync.rom.no_files"));
             Finish();
             return;
         }
 
-        RunSaveDownload(save, save_target, rom_id, target, target_slug, rom_path, rom_size);
+        RunSaveDownload(save, save_target, rom_id, frontend::ResolvePlatformSlug(platform_slug),
+                        rom_path, rom_size);
         Finish();
     }
 
     void SyncManager::StartSpecificStateDownload(int rom_id, const std::string& platform_slug,
-                                                 const std::string& title, const SaveEntry& state,
-                                                 SyncTarget target) {
+                                                 const std::string& title, const SaveEntry& state) {
         if (worker_running_.load()) {
             std::cout << "[SYNC] Already running, ignoring specific state download for rom_id="
                       << rom_id << std::endl;
@@ -668,7 +682,6 @@ namespace romm::model {
         job->platform_slug = platform_slug;
         job->title = title;
         job->state = state;
-        job->target = target;
 
         worker_running_ = true;
 
@@ -685,12 +698,11 @@ namespace romm::model {
         }
         thread_started_ = true;
         std::cout << "[SYNC] Started specific state download rom_id=" << rom_id
-                  << " state_id=" << state.id << " target=" << TargetId(target) << std::endl;
+                  << " state_id=" << state.id << std::endl;
     }
 
     void SyncManager::SpecificStateWorker(int rom_id, const std::string& platform_slug,
-                                          const std::string& title, const SaveEntry& state,
-                                          SyncTarget target) {
+                                          const std::string& title, const SaveEntry& state) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
             snapshot_ = SyncSnapshot();
@@ -708,15 +720,12 @@ namespace romm::model {
 
         // Resolve the state folder from the sync-state record (the ROM name
         // the game was synced under).
-        std::string target_slug;
         std::string rom_path;
         long long rom_size = 0;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            const auto& map = StateMap(target);
-            auto it = map.find(rom_id);
-            if (it != map.end()) {
-                target_slug = it->second.platform;
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
                 rom_path = it->second.rom_path;
                 rom_size = it->second.rom_size;
             }
@@ -730,7 +739,7 @@ namespace romm::model {
         const int slot = ParseStateSlot(state.file_name);
         std::string state_target;
         if (!rom_base.empty()) {
-            const std::string state_dir = GetStateDirFor(target, platform_slug);
+            const std::string state_dir = frontend::GetStatesDir(platform_slug);
             if (!state_dir.empty()) {
                 state_target = state_dir + StateSlotName(rom_base, slot);
             }
@@ -741,14 +750,14 @@ namespace romm::model {
             return;
         }
         if (state_target.empty()) {
-            SetStage(SyncStage::States, target, SyncStageState::Failed,
+            SetStage(SyncStage::States, SyncStageState::Failed,
                      romm::i18n::tr("sync.rom.no_files"));
             Finish();
             return;
         }
 
         RunStateDownload(state, state_target, rom_id, slot,
-                         target, target_slug, rom_path, rom_size);
+                         frontend::ResolvePlatformSlug(platform_slug), rom_path, rom_size);
         Finish();
     }
 
@@ -820,13 +829,13 @@ namespace romm::model {
         std::cout << "[SYNC] Finished" << std::endl;
     }
 
-    void SyncManager::SetStage(SyncStage stage, SyncTarget target, SyncStageState state,
+    void SyncManager::SetStage(SyncStage stage, SyncStageState state,
                                const std::string& message) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            size_t idx = StageIndex(stage, target);
+            size_t idx = StageIndex(stage);
             if (idx == (size_t)-1) {
-                snapshot_.stages.push_back({stage, target, state, message});
+                snapshot_.stages.push_back({stage, state, message});
             } else if (snapshot_.stages[idx].state != state || snapshot_.stages[idx].message != message) {
                 snapshot_.stages[idx].state = state;
                 snapshot_.stages[idx].message = message;
@@ -845,9 +854,9 @@ namespace romm::model {
         ScreenWakeManager::Instance().RequestUpdate();
     }
 
-    int SyncManager::StageIndex(SyncStage stage, SyncTarget target) const {
+    int SyncManager::StageIndex(SyncStage stage) const {
         for (size_t i = 0; i < snapshot_.stages.size(); ++i) {
-            if (snapshot_.stages[i].stage == stage && snapshot_.stages[i].target == target) {
+            if (snapshot_.stages[i].stage == stage) {
                 return (int)i;
             }
         }
@@ -870,24 +879,24 @@ namespace romm::model {
     }
 
     // Downloads one save from the server to `target_path` and records the
-    // result in the target's sync-state map. Returns true on success.
+    // result in the sync-state map. Returns true on success.
     bool SyncManager::RunSaveDownload(const SaveEntry& save, const std::string& target_path,
-                                      int rom_id, SyncTarget target, const std::string& target_slug,
+                                      int rom_id, const std::string& target_slug,
                                       const std::string& rom_path, long long rom_size) {
-        SetStage(SyncStage::Saves, target, SyncStageState::Running,
+        SetStage(SyncStage::Saves, SyncStageState::Running,
                  romm::i18n::tr("sync.saves.downloading"));
 
         auto& dl = DownloadManager::Instance();
         auto sr = dl.DownloadSave(save, target_path);
         if (!sr->success) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Failed,
+            SetStage(SyncStage::Saves, SyncStageState::Failed,
                      romm::i18n::format("sync.saves.failed", {{"error", sr->error}}));
             return false;
         }
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            SyncStateEntry& e = StateMap(target)[rom_id];
+            SyncStateEntry& e = sync_state_[rom_id];
             e.rom_id = rom_id;
             e.platform = target_slug;
             e.rom_path = rom_path;
@@ -898,23 +907,22 @@ namespace romm::model {
         }
         SaveSyncState();
 
-        SetStage(SyncStage::Saves, target, SyncStageState::Ok,
+        SetStage(SyncStage::Saves, SyncStageState::Ok,
                  romm::i18n::format("sync.saves.downloaded", {{"name", save.file_name}}));
         return true;
     }
 
     // Uploads the local save at `target_path` to RomM and records the result
-    // in the target's sync-state map. Returns true on success.
+    // in the sync-state map. Returns true on success.
     bool SyncManager::RunSaveUpload(const std::string& target_path, int rom_id,
-                                    SyncTarget target, const std::string& target_slug,
-                                    const std::string& core,
+                                    const std::string& target_slug, const std::string& core,
                                     const std::string& rom_path, long long rom_size) {
-        SetStage(SyncStage::Saves, target, SyncStageState::Running,
+        SetStage(SyncStage::Saves, SyncStageState::Running,
                  romm::i18n::tr("sync.saves.uploading"));
 
         // RomM links saves to the game by file name, and its emulator
         // integration only reads the standard .srm battery-save extension.
-        // The local file keeps the frontend's own extension (Tico's ".sav",
+        // The local file keeps this frontend's own extension (Tico's ".sav",
         // N64 ".fla"; RetroArch already uses .srm natively) — only the name
         // sent to the server is rewritten to .srm.
         const std::string server_name = ServerSaveName(target_path);
@@ -924,7 +932,7 @@ namespace romm::model {
         auto res = RommApi::uploadSaveAsync(rom_id, core, true, target_path, server_name);
         if (!WaitForCompleted(res, cancel_requested_)) return false;
         if (!res->success) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Failed,
+            SetStage(SyncStage::Saves, SyncStageState::Failed,
                      romm::i18n::format("sync.saves.failed", {{"error", res->error.empty()
                                                                           ? ("HTTP " + std::to_string(res->statusCode))
                                                                           : res->error}}));
@@ -938,7 +946,7 @@ namespace romm::model {
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            SyncStateEntry& e = StateMap(target)[rom_id];
+            SyncStateEntry& e = sync_state_[rom_id];
             e.rom_id = rom_id;
             e.platform = target_slug;
             e.rom_path = rom_path;
@@ -949,40 +957,40 @@ namespace romm::model {
         }
         SaveSyncState();
 
-        SetStage(SyncStage::Saves, target, SyncStageState::Ok,
+        SetStage(SyncStage::Saves, SyncStageState::Ok,
                  romm::i18n::format("sync.saves.uploaded", {{"name", server_name}}));
         return true;
     }
 
-    // Full per-save decision flow (decision table in the PRD, section 5.5)
-    // for ONE target of the destination. The worker runs this after
-    // resolving the save path for that target. Conflicts always prompt the
-    // user — per game, single or platform-wide sync alike.
-    void SyncManager::RunSavesStage(int rom_id, SyncTarget target,
-                                    const std::string& target_slug,
+    // Full per-save decision flow (decision table in the PRD, section 5.5).
+    // The worker runs this after resolving the save path for the game.
+    // Conflicts always prompt the user — per game, single or platform-wide
+    // sync alike.
+    void SyncManager::RunSavesStage(int rom_id, const std::string& platform_slug,
                                     const std::string& save_target_path,
                                     const SyncOptions& options) {
-        const std::string core = ResolveCoreFor(target, target_slug);
+        const std::string resolved_slug = frontend::ResolvePlatformSlug(platform_slug);
+        const std::string core = frontend::ResolveCore(platform_slug);
         if (core.empty() || save_target_path.empty()) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Unsupported,
+            SetStage(SyncStage::Saves, SyncStageState::Unsupported,
                      romm::i18n::tr("sync.saves.unsupported"));
             return;
         }
         const std::string& target_path = save_target_path;
 
-        SetStage(SyncStage::Saves, target, SyncStageState::Running,
+        SetStage(SyncStage::Saves, SyncStageState::Running,
                  romm::i18n::tr("sync.saves.checking"));
 
         if (cancel_requested_.load()) return;
 
         auto fetch = RommApi::fetchSavesAsync(rom_id);
         if (!fetch) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             return;
         }
         if (!WaitForCompleted(fetch, cancel_requested_)) return;
         if (!fetch->success) {
-            SetStage(SyncStage::Saves, target, SyncStageState::Failed, romm::i18n::tr("sync.saves.fetch_failed"));
+            SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.saves.fetch_failed"));
             return;
         }
 
@@ -1003,9 +1011,8 @@ namespace romm::model {
         bool has_entry = false;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            const auto& map = StateMap(target);
-            auto it = map.find(rom_id);
-            if (it != map.end()) {
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
                 entry = it->second;
                 has_entry = true;
             }
@@ -1023,20 +1030,20 @@ namespace romm::model {
         // skip/conflict logic is bypassed entirely.
         if (options.force_save_upload) {
             if (local_exists) {
-                RunSaveUpload(target_path, rom_id, target, target_slug, core,
+                RunSaveUpload(target_path, rom_id, resolved_slug, core,
                               entry.rom_path, entry.rom_size);
             } else {
-                SetStage(SyncStage::Saves, target, SyncStageState::Skipped,
+                SetStage(SyncStage::Saves, SyncStageState::Skipped,
                          romm::i18n::tr("sync.saves.no_local"));
             }
             return;
         }
         if (options.force_save_download) {
             if (server_save) {
-                RunSaveDownload(*server_save, target_path, rom_id, target, target_slug,
+                RunSaveDownload(*server_save, target_path, rom_id, resolved_slug,
                                 entry.rom_path, entry.rom_size);
             } else {
-                SetStage(SyncStage::Saves, target, SyncStageState::Skipped,
+                SetStage(SyncStage::Saves, SyncStageState::Skipped,
                          romm::i18n::tr("sync.saves.no_server"));
             }
             return;
@@ -1076,17 +1083,17 @@ namespace romm::model {
 
         switch (action) {
             case SaveAction::Download: {
-                RunSaveDownload(*server_save, target_path, rom_id, target, target_slug,
+                RunSaveDownload(*server_save, target_path, rom_id, resolved_slug,
                                 entry.rom_path, entry.rom_size);
                 break;
             }
             case SaveAction::Upload: {
-                RunSaveUpload(target_path, rom_id, target, target_slug, core,
+                RunSaveUpload(target_path, rom_id, resolved_slug, core,
                               entry.rom_path, entry.rom_size);
                 break;
             }
             case SaveAction::Skip: {
-                SetStage(SyncStage::Saves, target, SyncStageState::Skipped,
+                SetStage(SyncStage::Saves, SyncStageState::Skipped,
                          romm::i18n::tr("sync.saves.skipped"));
                 break;
             }
@@ -1116,23 +1123,23 @@ namespace romm::model {
                     conflict_overwrite_local_ = true;
                 }
 
-                SetStage(SyncStage::Saves, target, SyncStageState::WaitingConflict,
+                SetStage(SyncStage::Saves, SyncStageState::WaitingConflict,
                          romm::i18n::tr("sync.conflict.waiting"));
                 ScreenWakeManager::Instance().RequestUpdate();
 
                 const ConflictAnswer answer = WaitForConflictDecision();
                 if (answer == ConflictAnswer::Cancelled) return;
                 if (answer == ConflictAnswer::Skipped) {
-                    SetStage(SyncStage::Saves, target, SyncStageState::Skipped,
+                    SetStage(SyncStage::Saves, SyncStageState::Skipped,
                              romm::i18n::tr("sync.conflict.skipped"));
                     return;
                 }
 
                 if (answer == ConflictAnswer::OverwriteLocal) {
-                    RunSaveUpload(target_path, rom_id, target, target_slug, core,
+                    RunSaveUpload(target_path, rom_id, resolved_slug, core,
                                   entry.rom_path, entry.rom_size);
                 } else {
-                    RunSaveDownload(*server_save, target_path, rom_id, target, target_slug,
+                    RunSaveDownload(*server_save, target_path, rom_id, resolved_slug,
                                     entry.rom_path, entry.rom_size);
                 }
                 break;
@@ -1141,25 +1148,25 @@ namespace romm::model {
     }
 
     // Downloads one server state to its local slot file and records the
-    // result in the target's sync-state map. Returns true on success.
+    // result in the sync-state map. Returns true on success.
     bool SyncManager::RunStateDownload(const SaveEntry& state, const std::string& target_path,
-                                       int rom_id, int slot, SyncTarget target,
+                                       int rom_id, int slot,
                                        const std::string& target_slug,
                                        const std::string& rom_path, long long rom_size) {
-        SetStage(SyncStage::States, target, SyncStageState::Running,
+        SetStage(SyncStage::States, SyncStageState::Running,
                  romm::i18n::tr("sync.states.downloading"));
 
         auto& dl = DownloadManager::Instance();
         auto sr = dl.DownloadStateEntry(state, target_path);
         if (!sr->success) {
-            SetStage(SyncStage::States, target, SyncStageState::Failed,
+            SetStage(SyncStage::States, SyncStageState::Failed,
                      romm::i18n::format("sync.states.failed", {{"error", sr->error}}));
             return false;
         }
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            SyncStateEntry& e = StateMap(target)[rom_id];
+            SyncStateEntry& e = sync_state_[rom_id];
             e.rom_id = rom_id;
             e.platform = target_slug;
             e.rom_path = rom_path;
@@ -1171,20 +1178,19 @@ namespace romm::model {
         }
         SaveSyncState();
 
-        SetStage(SyncStage::States, target, SyncStageState::Ok,
+        SetStage(SyncStage::States, SyncStageState::Ok,
                  romm::i18n::format("sync.states.downloaded", {{"name", state.file_name}}));
         return true;
     }
 
     // Uploads the local state slot file at `target_path` to RomM and records
-    // the result in the target's sync-state map. The local file is already
-    // named "<base>.stateN", and that is exactly the name the server should
-    // store. Returns true on success.
+    // the result in the sync-state map. The local file is already named
+    // "<base>.stateN", and that is exactly the name the server should store.
+    // Returns true on success.
     bool SyncManager::RunStateUpload(const std::string& target_path, int rom_id, int slot,
-                                     SyncTarget target, const std::string& target_slug,
-                                     const std::string& core,
+                                     const std::string& target_slug, const std::string& core,
                                      const std::string& rom_path, long long rom_size) {
-        SetStage(SyncStage::States, target, SyncStageState::Running,
+        SetStage(SyncStage::States, SyncStageState::Running,
                  romm::i18n::tr("sync.states.uploading"));
 
         size_t slash = target_path.find_last_of('/');
@@ -1193,7 +1199,7 @@ namespace romm::model {
         auto res = RommApi::uploadStateAsync(rom_id, core, true, target_path, server_name);
         if (!WaitForCompleted(res, cancel_requested_)) return false;
         if (!res->success) {
-            SetStage(SyncStage::States, target, SyncStageState::Failed,
+            SetStage(SyncStage::States, SyncStageState::Failed,
                      romm::i18n::format("sync.states.failed", {{"error", res->error.empty()
                                                                            ? ("HTTP " + std::to_string(res->statusCode))
                                                                            : res->error}}));
@@ -1207,7 +1213,7 @@ namespace romm::model {
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            SyncStateEntry& e = StateMap(target)[rom_id];
+            SyncStateEntry& e = sync_state_[rom_id];
             e.rom_id = rom_id;
             e.platform = target_slug;
             e.rom_path = rom_path;
@@ -1219,48 +1225,47 @@ namespace romm::model {
         }
         SaveSyncState();
 
-        SetStage(SyncStage::States, target, SyncStageState::Ok,
+        SetStage(SyncStage::States, SyncStageState::Ok,
                  romm::i18n::format("sync.states.uploaded", {{"name", server_name}}));
         return true;
     }
 
-    // Full per-slot decision flow for save states of ONE target, mirroring
-    // RunSavesStage. The worker walks every slot with anything on either side
-    // (a local file, a recorded record, or a server state matched by name) and
-    // downloads, uploads, skips or prompts per slot, using the exact same
-    // decision table as saves.
-    void SyncManager::RunStatesStage(int rom_id, SyncTarget target,
-                                     const std::string& target_slug,
+    // Full per-slot decision flow for save states, mirroring RunSavesStage.
+    // The worker walks every slot with anything on either side (a local file,
+    // a recorded record, or a server state matched by name) and downloads,
+    // uploads, skips or prompts per slot, using the exact same decision table
+    // as saves.
+    void SyncManager::RunStatesStage(int rom_id, const std::string& platform_slug,
                                      const std::string& state_dir, const std::string& rom_base,
                                      const SyncOptions& options) {
-        const std::string core = ResolveCoreFor(target, target_slug);
+        const std::string target_slug = frontend::ResolvePlatformSlug(platform_slug);
+        const std::string core = frontend::ResolveCore(platform_slug);
         if (core.empty() || state_dir.empty()) {
-            SetStage(SyncStage::States, target, SyncStageState::Unsupported,
+            SetStage(SyncStage::States, SyncStageState::Unsupported,
                      romm::i18n::tr("sync.saves.unsupported"));
             return;
         }
 
-        SetStage(SyncStage::States, target, SyncStageState::Running,
+        SetStage(SyncStage::States, SyncStageState::Running,
                  romm::i18n::tr("sync.states.checking"));
         if (cancel_requested_.load()) return;
 
         auto fetch = RommApi::fetchStatesAsync(rom_id);
         if (!fetch) {
-            SetStage(SyncStage::States, target, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
             return;
         }
         if (!WaitForCompleted(fetch, cancel_requested_)) return;
         if (!fetch->success) {
-            SetStage(SyncStage::States, target, SyncStageState::Failed, romm::i18n::tr("sync.states.fetch_failed"));
+            SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.states.fetch_failed"));
             return;
         }
 
         SyncStateEntry entry;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            const auto& map = StateMap(target);
-            auto it = map.find(rom_id);
-            if (it != map.end()) {
+            auto it = sync_state_.find(rom_id);
+            if (it != sync_state_.end()) {
                 entry = it->second;
             }
         }
@@ -1339,24 +1344,24 @@ namespace romm::model {
             if (options.force_state_upload) {
                 if (local_exists) {
                     delete_server_states_named(upload_name);
-                    if (!RunStateUpload(local_path, rom_id, slot, target, target_slug, core,
+                    if (!RunStateUpload(local_path, rom_id, slot, target_slug, core,
                                         entry.rom_path, entry.rom_size)) {
                         all_ok = false;
                     }
                 } else {
-                    SetStage(SyncStage::States, target, SyncStageState::Skipped,
+                    SetStage(SyncStage::States, SyncStageState::Skipped,
                              romm::i18n::format("sync.states.no_local_slot", {{"slot", std::to_string(slot)}}));
                 }
                 continue;
             }
             if (options.force_state_download) {
                 if (server_save) {
-                    if (!RunStateDownload(*server_save, local_path, rom_id, slot, target,
+                    if (!RunStateDownload(*server_save, local_path, rom_id, slot,
                                           target_slug, entry.rom_path, entry.rom_size)) {
                         all_ok = false;
                     }
                 } else {
-                    SetStage(SyncStage::States, target, SyncStageState::Skipped,
+                    SetStage(SyncStage::States, SyncStageState::Skipped,
                              romm::i18n::tr("sync.states.no_server"));
                 }
                 continue;
@@ -1395,7 +1400,7 @@ namespace romm::model {
 
             switch (action) {
                 case SlotAction::Download: {
-                    if (!RunStateDownload(*server_save, local_path, rom_id, slot, target,
+                    if (!RunStateDownload(*server_save, local_path, rom_id, slot,
                                           target_slug, entry.rom_path, entry.rom_size)) {
                         all_ok = false;
                     }
@@ -1403,7 +1408,7 @@ namespace romm::model {
                 }
                 case SlotAction::Upload: {
                     delete_server_states_named(upload_name);
-                    if (!RunStateUpload(local_path, rom_id, slot, target, target_slug, core,
+                    if (!RunStateUpload(local_path, rom_id, slot, target_slug, core,
                                         entry.rom_path, entry.rom_size)) {
                         all_ok = false;
                     }
@@ -1437,26 +1442,26 @@ namespace romm::model {
                         conflict_overwrite_local_ = true;
                     }
 
-                    SetStage(SyncStage::States, target, SyncStageState::WaitingConflict,
+                    SetStage(SyncStage::States, SyncStageState::WaitingConflict,
                              romm::i18n::tr("sync.conflict.waiting"));
                     ScreenWakeManager::Instance().RequestUpdate();
 
                     const ConflictAnswer answer = WaitForConflictDecision();
                     if (answer == ConflictAnswer::Cancelled) return;
                     if (answer == ConflictAnswer::Skipped) {
-                        SetStage(SyncStage::States, target, SyncStageState::Skipped,
+                        SetStage(SyncStage::States, SyncStageState::Skipped,
                                  romm::i18n::tr("sync.conflict.skipped"));
                         break;
                     }
 
                     if (answer == ConflictAnswer::OverwriteLocal) {
                         delete_server_states_named(upload_name);
-                        if (!RunStateUpload(local_path, rom_id, slot, target, target_slug, core,
+                        if (!RunStateUpload(local_path, rom_id, slot, target_slug, core,
                                             entry.rom_path, entry.rom_size)) {
                             all_ok = false;
                         }
                     } else {
-                        if (!RunStateDownload(*server_save, local_path, rom_id, slot, target,
+                        if (!RunStateDownload(*server_save, local_path, rom_id, slot,
                                               target_slug, entry.rom_path, entry.rom_size)) {
                             all_ok = false;
                         }
@@ -1469,7 +1474,7 @@ namespace romm::model {
         // Only crown the run when nothing failed; a failed transfer must keep
         // its Failed row visible instead of being masked by a blanket Ok.
         if (!cancel_requested_.load() && all_ok) {
-            SetStage(SyncStage::States, target, SyncStageState::Ok,
+            SetStage(SyncStage::States, SyncStageState::Ok,
                      romm::i18n::tr("sync.states.done"));
         }
     }
@@ -1481,44 +1486,32 @@ namespace romm::model {
         snapshot_.conflict.active = false;
         snapshot_.stages.clear();
 
-        // One row per target per stage, in run order — the progress modal
-        // renders whatever rows exist, so its row count always matches the
-        // work that will actually happen.
-        std::vector<SyncTarget> targets;
-        ResolveDestination(options.destination, targets);
-
+        // One row per stage, in run order — the progress modal renders
+        // whatever rows exist, so its row count always matches the work that
+        // will actually happen.
         if (options.saves_only) {
-            for (SyncTarget t : targets) {
-                snapshot_.stages.push_back({SyncStage::Saves, t, SyncStageState::Pending, ""});
-            }
+            snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
             return;
         }
         if (options.states_only) {
-            for (SyncTarget t : targets) {
-                snapshot_.stages.push_back({SyncStage::States, t, SyncStageState::Pending, ""});
-            }
+            snapshot_.stages.push_back({SyncStage::States, SyncStageState::Pending, ""});
             return;
         }
-        for (SyncTarget t : targets) {
-            snapshot_.stages.push_back({SyncStage::Rom, t, SyncStageState::Pending, ""});
-        }
-        for (SyncTarget t : targets) {
-            snapshot_.stages.push_back({SyncStage::Saves, t, SyncStageState::Pending, ""});
-        }
-        // Cover and platform background are Tico-specific features.
-        if (DestinationIncludes(options.destination, SyncTarget::Tico)) {
-            snapshot_.stages.push_back({SyncStage::Cover, SyncTarget::Tico,
-                                        SyncStageState::Pending, ""});
+        snapshot_.stages.push_back({SyncStage::Rom, SyncStageState::Pending, ""});
+        snapshot_.stages.push_back({SyncStage::Saves, SyncStageState::Pending, ""});
+        // Cover and platform background are Tico-only features; the
+        // RetroArch build has no such stages.
+        if (frontend::kHasCoverSync) {
+            snapshot_.stages.push_back({SyncStage::Cover, SyncStageState::Pending, ""});
             if (options.use_cover_as_background) {
-                snapshot_.stages.push_back({SyncStage::Background, SyncTarget::Tico,
-                                            SyncStageState::Pending, ""});
+                snapshot_.stages.push_back({SyncStage::Background, SyncStageState::Pending, ""});
             }
         }
     }
 
-    void SyncManager::GetSyncState(SyncTarget target, std::map<int, SyncStateEntry>& out) const {
+    void SyncManager::GetSyncState(std::map<int, SyncStateEntry>& out) const {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        out = StateMap(target);
+        out = sync_state_;
     }
 
     void SyncManager::Worker(const GameDetail& detail, const std::string& platform_slug,
@@ -1585,17 +1578,17 @@ namespace romm::model {
 
             auto res = RommApi::fetchRomDetailAsync(games[i].rom_id, 0, game_slug);
             if (!res) {
-                SetStage(SyncStage::Rom, SyncTarget::Tico, SyncStageState::Failed,
+                SetStage(SyncStage::Rom, SyncStageState::Failed,
                          romm::i18n::tr("sync.error.config"));
                 continue;
             }
             if (!WaitForCompleted(res, cancel_requested_)) {
-                SetStage(SyncStage::Rom, SyncTarget::Tico, SyncStageState::Skipped,
+                SetStage(SyncStage::Rom, SyncStageState::Skipped,
                          romm::i18n::tr("sync.cancelled"));
                 break;
             }
             if (!res->success) {
-                SetStage(SyncStage::Rom, SyncTarget::Tico, SyncStageState::Failed,
+                SetStage(SyncStage::Rom, SyncStageState::Failed,
                          romm::i18n::tr("sync.bulk.detail_failed"));
                 continue;
             }
@@ -1606,31 +1599,24 @@ namespace romm::model {
 
     // Shared per-game pipeline (ROM -> saves -> cover) used by both the
     // single-game and the platform-wide workers. Save conflicts prompt the
-    // user in both flows.
+    // user in both flows. Every stage writes to this build's one frontend.
     void SyncManager::RunGameSync(const GameDetail& detail, const std::string& platform_slug,
                                   const std::string& title, const SyncOptions& options) {
         struct stat st;
 
         auto& config = ConfigManager::Instance();
 
-        std::vector<SyncTarget> targets;
-        ResolveDestination(options.destination, targets);
-
         if (!config.IsValid()) {
-            for (SyncTarget t : targets) {
-                if (options.saves_only) {
-                    SetStage(SyncStage::Saves, t, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-                } else if (options.states_only) {
-                    SetStage(SyncStage::States, t, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-                } else {
-                    SetStage(SyncStage::Rom, t, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
-                    SetStage(SyncStage::Saves, t, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            if (options.saves_only) {
+                SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            } else if (options.states_only) {
+                SetStage(SyncStage::States, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+            } else {
+                SetStage(SyncStage::Rom, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+                SetStage(SyncStage::Saves, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
+                if (frontend::kHasCoverSync) {
+                    SetStage(SyncStage::Cover, SyncStageState::Failed, romm::i18n::tr("sync.error.config"));
                 }
-            }
-            if (!options.saves_only && !options.states_only &&
-                DestinationIncludes(options.destination, SyncTarget::Tico)) {
-                SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Failed,
-                         romm::i18n::tr("sync.error.config"));
             }
             return;
         }
@@ -1645,20 +1631,16 @@ namespace romm::model {
             files.push_back(rf);
         }
 
-        if (!options.saves_only && !options.states_only) {
+        if (!options.saves_only && !options.states_only && files.size() != 1) {
             const SyncStageState state = (files.size() > 1) ? SyncStageState::Unsupported
                                                             : SyncStageState::Failed;
             const char* key = (files.size() > 1) ? "sync.multidisc" : "sync.rom.no_files";
-            if (files.size() != 1) {
-                for (SyncTarget t : targets) {
-                    SetStage(SyncStage::Rom, t, state, romm::i18n::tr(key));
-                    SetStage(SyncStage::Saves, t, SyncStageState::Skipped, "");
-                }
-                if (DestinationIncludes(options.destination, SyncTarget::Tico)) {
-                    SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Skipped, "");
-                }
-                return;
+            SetStage(SyncStage::Rom, state, romm::i18n::tr(key));
+            SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+            if (frontend::kHasCoverSync) {
+                SetStage(SyncStage::Cover, SyncStageState::Skipped, "");
             }
+            return;
         }
 
         auto& dl = DownloadManager::Instance();
@@ -1666,257 +1648,236 @@ namespace romm::model {
         if (!files.empty()) {
             rom_name = dl.SanitizeFilename(files.front().file_name);
         } else if (options.saves_only || options.states_only) {
-            // Saves/states-only runs may have no file data in the detail; a
-            // target's own sync record knows the ROM name it synced under
-            // (each target records its own path — they can differ when
-            // RetroArch keeps its own ROM folders).
-            for (SyncTarget t : targets) {
-                std::string recorded_rom_path;
-                {
-                    std::lock_guard<std::mutex> lock(state_mutex_);
-                    const auto& map = StateMap(t);
-                    auto it = map.find(detail.rom_id);
-                    if (it != map.end()) recorded_rom_path = it->second.rom_path;
-                }
-                size_t slash = recorded_rom_path.find_last_of('/');
-                if (slash != std::string::npos) {
-                    rom_name = recorded_rom_path.substr(slash + 1);
-                    break;
-                }
+            // Saves/states-only runs may have no file data in the detail; the
+            // sync record knows the ROM name it synced under.
+            std::string recorded_rom_path;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                auto it = sync_state_.find(detail.rom_id);
+                if (it != sync_state_.end()) recorded_rom_path = it->second.rom_path;
+            }
+            size_t slash = recorded_rom_path.find_last_of('/');
+            if (slash != std::string::npos) {
+                rom_name = recorded_rom_path.substr(slash + 1);
             }
         }
         if (rom_name.empty()) {
-            for (SyncTarget t : targets) {
-                SetStage(options.states_only ? SyncStage::States : SyncStage::Saves,
-                         t, SyncStageState::Skipped, romm::i18n::tr("sync.rom.no_files"));
-            }
+            SetStage(options.states_only ? SyncStage::States : SyncStage::Saves,
+                     SyncStageState::Skipped, romm::i18n::tr("sync.rom.no_files"));
             return;
         }
         const std::string rom_base = StripExtension(rom_name);
+        const std::string resolved_slug = frontend::ResolvePlatformSlug(platform_slug);
 
         // Tico cannot run compressed archives (7z, zip, ...) — warn the user
         // to extract the ROM (e.g. with DBI) before expecting it to launch.
         // Saves/states-only runs never touch the ROM, so the warning is
         // irrelevant.
         if (!options.saves_only && !options.states_only &&
-            DestinationIncludes(options.destination, SyncTarget::Tico) &&
-            SyncManager::IsCompressedArchive(rom_name)) {
+            frontend::kIsTico && SyncManager::IsCompressedArchive(rom_name)) {
             size_t dot = rom_name.find_last_of('.');
             std::string ext = (dot != std::string::npos) ? rom_name.substr(dot) : "";
             SetWarning(romm::i18n::format("sync.warning.compressed", {{"ext", ext}}));
         }
 
-        // --- Per-target pipeline -------------------------------------------
-        // Targets run in order, each against a fresh server fetch during its
-        // saves/states stage: after Tico's transfers land, RetroArch's stage
-        // decides against the server state Tico left behind — so an upload
-        // propagates to the second frontend instead of fighting it.
-        for (SyncTarget target : targets) {
-            const std::string target_slug = ResolvePlatformSlugFor(target, platform_slug);
-            const std::string rom_dir = GetRomDirFor(target, platform_slug);
+        // --- Stage 1: ROM -------------------------------------------------
+        if (!options.saves_only && !options.states_only) {
+            const RomFileEntry& file = files.front();
+            const std::string rom_dir = frontend::GetRomsDir(platform_slug);
+            const std::string rom_path = rom_dir + rom_name;
+            SetStage(SyncStage::Rom, SyncStageState::Running,
+                     romm::i18n::tr("sync.rom.downloading"));
 
-            // --- Stage 1: ROM -------------------------------------------------
-            if (!options.saves_only && !options.states_only) {
-                const RomFileEntry& file = files.front();
-                const std::string rom_path = rom_dir + rom_name;
-                SetStage(SyncStage::Rom, target, SyncStageState::Running,
-                         romm::i18n::tr("sync.rom.downloading"));
-
-                if (cancel_requested_.load()) {
-                    return;
-                }
-
-                // PSP accepts only its emulator's container formats (same
-                // whitelist as the classic download pipeline).
-                std::string rom_ext = "";
-                {
-                    size_t d = rom_name.find_last_of('.');
-                    if (d != std::string::npos) rom_ext = rom_name.substr(d);
-                }
-                std::string ext_lower = rom_ext;
-                for (char& c : ext_lower) c = (char)std::tolower((unsigned char)c);
-                if (target_slug == "psp" && ext_lower != ".iso" && ext_lower != ".cso" && ext_lower != ".pbp") {
-                    SetStage(SyncStage::Rom, target, SyncStageState::Unsupported,
-                             romm::i18n::tr("sync.rom.unsupported_ext"));
-                    SetStage(SyncStage::Saves, target, SyncStageState::Skipped, "");
-                    continue;
-                }
-
-                bool rom_present = false;
-                long long rom_present_size = 0;
-                if (stat(rom_path.c_str(), &st) == 0 && st.st_size > 0) {
-                    rom_present = true;
-                    rom_present_size = (long long)st.st_size;
-                }
-
-                // Same-size ROMs are normally skipped; "force ROM" re-downloads
-                // them. When both frontends share the same ROM folder (the
-                // default), the second target's check finds the file the first
-                // one just wrote and skips for free.
-                if (!options.force_rom && rom_present && rom_present_size == file.file_size_bytes) {
-                    SetStage(SyncStage::Rom, target, SyncStageState::Skipped,
-                             romm::i18n::format("sync.rom.already", {{"path", rom_path}}));
-                } else {
-                    // Different size (or absent): overwrite via DownloadToPath,
-                    // which keeps the old file until the new one is validated.
-                    if (rom_present) {
-                        std::cout << "[SYNC] ROM exists with different size ("
-                                  << rom_present_size << " != " << file.file_size_bytes
-                                  << "), overwriting" << std::endl;
-                    }
-
-                    std::string url = config.GetRommHost() + "/api/roms/" + std::to_string(file.id) +
-                                      "/files/content/" +
-                                      DownloadManager::EscapeUrlComponent(file.file_name);
-                    std::map<std::string, std::string> headers = {
-                        {"Authorization", "Bearer " + config.GetApiKey()}
-                    };
-
-                    DownloadManager::DownloadOutcome oc = dl.DownloadToPath(url, headers, rom_path, file.file_size_bytes);
-                    if (!oc.success || cancel_requested_.load()) {
-                        if (cancel_requested_.load()) {
-                            SetStage(SyncStage::Rom, target, SyncStageState::Skipped,
-                                     romm::i18n::tr("sync.cancelled"));
-                        } else {
-                            SetStage(SyncStage::Rom, target, SyncStageState::Failed,
-                                     romm::i18n::format("sync.rom.failed", {{"error", oc.error_message}}));
-                        }
-                    } else {
-                        SetStage(SyncStage::Rom, target, SyncStageState::Ok,
-                                 romm::i18n::format("sync.rom.ok", {{"path", rom_path}}));
-                    }
-                }
-
-                if (cancel_requested_.load()) {
-                    return;
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(state_mutex_);
-                    SyncStateEntry& e = StateMap(target)[detail.rom_id];
-                    e.rom_id = detail.rom_id;
-                    e.platform = target_slug;
-                    e.rom_path = rom_path;
-                    e.rom_size = file.file_size_bytes;
-                }
-                SaveSyncState();
-            }
-
-            // --- Stage 2: Saves / States --------------------------------------
-            if (options.states_only) {
-                RunStatesStage(detail.rom_id, target, target_slug,
-                               GetStateDirFor(target, platform_slug), rom_base, options);
-            } else {
-                const std::string save_target =
-                    GetSaveDirFor(target, platform_slug).empty()
-                        ? ""
-                        : GetSaveDirFor(target, platform_slug) + rom_base +
-                              ResolveSaveExtensionFor(target, target_slug);
-                RunSavesStage(detail.rom_id, target, target_slug, save_target, options);
-            }
             if (cancel_requested_.load()) {
                 return;
             }
-        }
 
-        // --- Stage 3: Cover --------------------------------------------------
-        // --- Stage 4: Background (optional) ------------------------------------
-        // Tico-specific features; skipped entirely for RetroArch-only runs.
-        if (!options.saves_only && !options.states_only &&
-            DestinationIncludes(options.destination, SyncTarget::Tico)) {
-            const std::string cover_target =
-                config.GetTicoCoverPath(platform_slug) + rom_base + ".jpg";
-            std::string raw_cover = detail.path_cover_large;
-            if (raw_cover.empty()) raw_cover = detail.path_cover_small;
-            if (raw_cover.empty()) {
-                SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Skipped,
-                         romm::i18n::tr("sync.cover.missing"));
-            } else {
-                SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Running,
-                         romm::i18n::tr("sync.cover.downloading"));
-
-            std::string cover_url = raw_cover;
-            if (cover_url.find("http") != 0) {
-                cover_url = config.GetRommHost() + cover_url;
-            }
-            size_t q = cover_url.find('?');
-            if (q != std::string::npos) cover_url = cover_url.substr(0, q);
-
-            // Skip when the cover is already on disk with the size we last
-            // recorded; anything else pulls it again.
-            long long prev_cover_size = 0;
+            // PSP accepts only its emulator's container formats (same
+            // whitelist as the classic download pipeline).
+            std::string rom_ext = "";
             {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                const auto& map = StateMap(SyncTarget::Tico);
-                auto it = map.find(detail.rom_id);
-                if (it != map.end()) prev_cover_size = it->second.cover_size;
+                size_t d = rom_name.find_last_of('.');
+                if (d != std::string::npos) rom_ext = rom_name.substr(d);
+            }
+            std::string ext_lower = rom_ext;
+            for (char& c : ext_lower) c = (char)std::tolower((unsigned char)c);
+            if (resolved_slug == "psp" && ext_lower != ".iso" && ext_lower != ".cso" && ext_lower != ".pbp") {
+                SetStage(SyncStage::Rom, SyncStageState::Unsupported,
+                         romm::i18n::tr("sync.rom.unsupported_ext"));
+                SetStage(SyncStage::Saves, SyncStageState::Skipped, "");
+                return;
             }
 
-            bool cover_present = false;
-            long long cover_present_size = 0;
-            if (stat(cover_target.c_str(), &st) == 0 && st.st_size > 0) {
-                cover_present = true;
-                cover_present_size = (long long)st.st_size;
+            bool rom_present = false;
+            long long rom_present_size = 0;
+            if (stat(rom_path.c_str(), &st) == 0 && st.st_size > 0) {
+                rom_present = true;
+                rom_present_size = (long long)st.st_size;
             }
 
-            if (cover_present && !options.force_cover && cover_present_size == prev_cover_size) {
-                SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Skipped,
-                         romm::i18n::format("sync.cover.already", {{"path", cover_target}}));
+            // Same-size ROMs are normally skipped; "force ROM" re-downloads
+            // them.
+            if (!options.force_rom && rom_present && rom_present_size == file.file_size_bytes) {
+                SetStage(SyncStage::Rom, SyncStageState::Skipped,
+                         romm::i18n::format("sync.rom.already", {{"path", rom_path}}));
             } else {
+                // Different size (or absent): overwrite via DownloadToPath,
+                // which keeps the old file until the new one is validated.
+                if (rom_present) {
+                    std::cout << "[SYNC] ROM exists with different size ("
+                              << rom_present_size << " != " << file.file_size_bytes
+                              << "), overwriting" << std::endl;
+                }
+
+                std::string url = config.GetRommHost() + "/api/roms/" + std::to_string(file.id) +
+                                  "/files/content/" +
+                                  DownloadManager::EscapeUrlComponent(file.file_name);
                 std::map<std::string, std::string> headers = {
                     {"Authorization", "Bearer " + config.GetApiKey()}
                 };
-                DownloadManager::DownloadOutcome oc = dl.DownloadToPath(cover_url, headers, cover_target, 0);
+
+                DownloadManager::DownloadOutcome oc = dl.DownloadToPath(url, headers, rom_path, file.file_size_bytes);
                 if (!oc.success || cancel_requested_.load()) {
                     if (cancel_requested_.load()) {
-                        SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Skipped,
+                        SetStage(SyncStage::Rom, SyncStageState::Skipped,
                                  romm::i18n::tr("sync.cancelled"));
                     } else {
-                        SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Failed,
-                                 romm::i18n::format("sync.cover.failed", {{"error", oc.error_message}}));
+                        SetStage(SyncStage::Rom, SyncStageState::Failed,
+                                 romm::i18n::format("sync.rom.failed", {{"error", oc.error_message}}));
                     }
                 } else {
-                    {
-                        std::lock_guard<std::mutex> lock(state_mutex_);
-                        StateMap(SyncTarget::Tico)[detail.rom_id].cover_size = oc.final_size;
-                    }
-                    SaveSyncState();
-                    SetStage(SyncStage::Cover, SyncTarget::Tico, SyncStageState::Ok,
-                             romm::i18n::format("sync.cover.ok", {{"path", cover_target}}));
+                    SetStage(SyncStage::Rom, SyncStageState::Ok,
+                             romm::i18n::format("sync.rom.ok", {{"path", rom_path}}));
                 }
             }
+
+            if (cancel_requested_.load()) {
+                return;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                SyncStateEntry& e = sync_state_[detail.rom_id];
+                e.rom_id = detail.rom_id;
+                e.platform = resolved_slug;
+                e.rom_path = rom_path;
+                e.rom_size = file.file_size_bytes;
+            }
+            SaveSyncState();
         }
 
-        // --- Stage 4: Background (optional) --------------------------------
-        // Reuse this cover as the platform background for THIS game, mirroring
-        // Tico's cover layout: assets/backgrounds/<platform>/<game>.jpg, one
-        // file per game (the same stem the cover uses). Runs for every game
-        // when the option is on: even when the cover was already on disk
-        // (skipped) or the server has no cover art for this game but an older
-        // cover file remains on disk.
-        if (options.use_cover_as_background) {
-            if (cancel_requested_.load()) {
-                SetStage(SyncStage::Background, SyncTarget::Tico, SyncStageState::Skipped,
-                         romm::i18n::tr("sync.cancelled"));
+        // --- Stage 2: Saves / States --------------------------------------
+        if (options.states_only) {
+            RunStatesStage(detail.rom_id, platform_slug,
+                           frontend::GetStatesDir(platform_slug), rom_base, options);
+        } else {
+            const std::string save_dir = frontend::GetSavesDir(platform_slug);
+            const std::string save_target =
+                save_dir.empty()
+                    ? ""
+                    : save_dir + rom_base + frontend::ResolveSaveExtension(platform_slug);
+            RunSavesStage(detail.rom_id, platform_slug, save_target, options);
+        }
+        if (cancel_requested_.load()) {
+            return;
+        }
+
+        // --- Stage 3: Cover (Tico only) -----------------------------------
+        // Tico-specific feature: download the game's cover into the frontend's
+        // assets/covers/<platform>/ folder. The RetroArch build has no stage.
+        if (frontend::kHasCoverSync && !options.saves_only && !options.states_only) {
+            const std::string cover_target =
+                frontend::GetCoverDir(platform_slug) + rom_base + ".jpg";
+            std::string raw_cover = detail.path_cover_large;
+            if (raw_cover.empty()) raw_cover = detail.path_cover_small;
+            if (raw_cover.empty()) {
+                SetStage(SyncStage::Cover, SyncStageState::Skipped,
+                         romm::i18n::tr("sync.cover.missing"));
             } else {
-                struct stat bg_check;
-                if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
-                    const std::string bg_path = config.GetTicoBackgroundPath(platform_slug, rom_base);
-                    SetStage(SyncStage::Background, SyncTarget::Tico, SyncStageState::Running,
-                             romm::i18n::tr("sync.background.copying"));
-                    if (CopyFile(cover_target, bg_path)) {
-                        SetStage(SyncStage::Background, SyncTarget::Tico, SyncStageState::Ok,
-                                 romm::i18n::format("sync.background.ok", {{"path", bg_path}}));
-                    } else {
-                        SetStage(SyncStage::Background, SyncTarget::Tico, SyncStageState::Failed,
-                                 romm::i18n::format("sync.background.failed", {{"path", bg_path}}));
-                    }
+                SetStage(SyncStage::Cover, SyncStageState::Running,
+                         romm::i18n::tr("sync.cover.downloading"));
+
+                std::string cover_url = raw_cover;
+                if (cover_url.find("http") != 0) {
+                    cover_url = config.GetRommHost() + cover_url;
+                }
+                size_t q = cover_url.find('?');
+                if (q != std::string::npos) cover_url = cover_url.substr(0, q);
+
+                // Skip when the cover is already on disk with the size we last
+                // recorded; anything else pulls it again.
+                long long prev_cover_size = 0;
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex_);
+                    auto it = sync_state_.find(detail.rom_id);
+                    if (it != sync_state_.end()) prev_cover_size = it->second.cover_size;
+                }
+
+                bool cover_present = false;
+                long long cover_present_size = 0;
+                if (stat(cover_target.c_str(), &st) == 0 && st.st_size > 0) {
+                    cover_present = true;
+                    cover_present_size = (long long)st.st_size;
+                }
+
+                if (cover_present && !options.force_cover && cover_present_size == prev_cover_size) {
+                    SetStage(SyncStage::Cover, SyncStageState::Skipped,
+                             romm::i18n::format("sync.cover.already", {{"path", cover_target}}));
                 } else {
-                    SetStage(SyncStage::Background, SyncTarget::Tico, SyncStageState::Skipped,
-                             romm::i18n::tr("sync.background.no_cover"));
+                    std::map<std::string, std::string> headers = {
+                        {"Authorization", "Bearer " + config.GetApiKey()}
+                    };
+                    DownloadManager::DownloadOutcome oc = dl.DownloadToPath(cover_url, headers, cover_target, 0);
+                    if (!oc.success || cancel_requested_.load()) {
+                        if (cancel_requested_.load()) {
+                            SetStage(SyncStage::Cover, SyncStageState::Skipped,
+                                     romm::i18n::tr("sync.cancelled"));
+                        } else {
+                            SetStage(SyncStage::Cover, SyncStageState::Failed,
+                                     romm::i18n::format("sync.cover.failed", {{"error", oc.error_message}}));
+                        }
+                    } else {
+                        {
+                            std::lock_guard<std::mutex> lock(state_mutex_);
+                            sync_state_[detail.rom_id].cover_size = oc.final_size;
+                        }
+                        SaveSyncState();
+                        SetStage(SyncStage::Cover, SyncStageState::Ok,
+                                 romm::i18n::format("sync.cover.ok", {{"path", cover_target}}));
+                    }
                 }
             }
-        }
+
+            // --- Stage 4: Background (optional, Tico only) ----------------
+            // Reuse this cover as the platform background for THIS game,
+            // mirroring Tico's cover layout: assets/backgrounds/<platform>/
+            // <game>.jpg, one file per game (the same stem the cover uses).
+            // Runs for every game when the option is on: even when the cover
+            // was already on disk (skipped) or the server has no cover art
+            // for this game but an older cover file remains on disk.
+            if (options.use_cover_as_background) {
+                if (cancel_requested_.load()) {
+                    SetStage(SyncStage::Background, SyncStageState::Skipped,
+                             romm::i18n::tr("sync.cancelled"));
+                } else {
+                    struct stat bg_check;
+                    if (stat(cover_target.c_str(), &bg_check) == 0 && bg_check.st_size > 0) {
+                        const std::string bg_path = frontend::GetBackgroundPath(platform_slug, rom_base);
+                        SetStage(SyncStage::Background, SyncStageState::Running,
+                                 romm::i18n::tr("sync.background.copying"));
+                        if (CopyFile(cover_target, bg_path)) {
+                            SetStage(SyncStage::Background, SyncStageState::Ok,
+                                     romm::i18n::format("sync.background.ok", {{"path", bg_path}}));
+                        } else {
+                            SetStage(SyncStage::Background, SyncStageState::Failed,
+                                     romm::i18n::format("sync.background.failed", {{"path", bg_path}}));
+                        }
+                    } else {
+                        SetStage(SyncStage::Background, SyncStageState::Skipped,
+                                 romm::i18n::tr("sync.background.no_cover"));
+                    }
+                }
+            }
         }
     }
 

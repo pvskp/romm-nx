@@ -7,7 +7,6 @@
 #include "../model/ScreenWakeManager.hpp"
 #include "../model/AudioManager.hpp"
 #include "../model/NetworkStatus.hpp"
-#include "../model/DownloadManager.hpp"
 #include "../i18n/I18n.hpp"
 #include "LibraryLayout.hpp"
 #include "GameGrid.hpp"

@@ -64,16 +64,6 @@ namespace romm::navigation {
         Large
     };
 
-    struct UninstallModalPayload {
-        bool active = false;
-        int rom_id = 0;
-        std::string platform_slug;
-        std::string title;
-        std::string filename;
-        std::string cover_path;
-        Screen source_screen;
-    };
-
     class NavigationManager : public std::enable_shared_from_this<NavigationManager> {
     private:
         pu::ui::Application* app;
@@ -145,7 +135,6 @@ namespace romm::navigation {
         bool sync_opt_force_cover = false;
         bool sync_opt_background = false; // cover -> platform background
         size_t sync_opt_save_dir = 0;
-        romm::model::SyncDestination sync_opt_destination = romm::model::SyncDestination::Tico;
         // Platform-wide sync intent (triggered from the library Y-Menu).
         bool sync_bulk_pending = false;
         std::string sync_bulk_platform_slug;
@@ -262,12 +251,6 @@ namespace romm::navigation {
         std::shared_ptr<romm::model::DataModel> GetModel() { return model; }
         pu::ui::Application* GetApp() { return app; }
 
-        // Modal Controls
-        void ShowUninstallModal(const UninstallModalPayload& payload) { uninstall_modal = payload; uninstall_modal.active = true; }
-        void HideUninstallModal() { uninstall_modal.active = false; }
-        const UninstallModalPayload& GetUninstallModalState() const { return uninstall_modal; }
-        void HandleUninstallModalInput(u64 keys_down);
-
         // Sync modal controls. The modal is a view over SyncManager's snapshot;
         // closing it only hides the UI, the worker keeps running. The modal
         // starts in Options mode so the user can force re-downloads/uploads
@@ -286,7 +269,6 @@ namespace romm::navigation {
         bool GetSyncOptionForceCover() const { return sync_opt_force_cover; }
         bool GetSyncOptionBackground() const { return sync_opt_background; }
         size_t GetSyncOptionSaveDir() const { return sync_opt_save_dir; } // 0=auto, 1=upload, 2=download
-        romm::model::SyncDestination GetSyncOptionDestination() const { return sync_opt_destination; }
         void SetSyncOptionIdx(size_t idx) { sync_option_idx = idx; }
 
         // Platform-wide sync intent (set when opening the options from the
@@ -352,7 +334,6 @@ namespace romm::navigation {
         bool GetStateRescanPending() const { return state_rescan_pending; }
 
     private:
-        UninstallModalPayload uninstall_modal;
         bool update_modal_active = false;
         bool update_popup_shown_this_session = false;
 

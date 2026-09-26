@@ -1,9 +1,7 @@
 #include "GameGrid.hpp"
 #include "CoverCache.hpp"
-#include "DetailLayout.hpp"
 #include "PlaceholderCover.hpp"
 #include "../model/ConfigManager.hpp"
-#include "../model/DownloadManager.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdio>
 #include <iostream>
@@ -53,11 +51,6 @@ namespace romm::ui {
         if (panel_title_tex) { pu::ui::render::DeleteTexture(panel_title_tex); panel_title_tex = nullptr; }
         if (panel_meta_tex)  { pu::ui::render::DeleteTexture(panel_meta_tex);  panel_meta_tex  = nullptr; }
         if (panel_desc_tex)  { pu::ui::render::DeleteTexture(panel_desc_tex);  panel_desc_tex  = nullptr; }
-        if (panel_action_tex) {
-            pu::ui::render::DeleteTexture(panel_action_tex);
-            panel_action_tex = nullptr;
-            panel_action_str.clear();
-        }
         panel_cached_game_idx = 999999;
         panel_cached_generation = 0;
         panel_cached_detail_state = romm::model::DetailLoadState::NotLoaded;
@@ -677,12 +670,6 @@ namespace romm::ui {
                 drawer->RenderRoundedRectangleFill(sel, list_x, row_y - 4, DETAIL_LIST_W, DETAIL_ROW_H - 4, 8);
             }
 
-            if (romm::model::ConfigManager::Instance().ShowInstalledBadge() &&
-                romm::model::DownloadManager::Instance().GetCachedInstallState(platform_slug, filtered_games[idx].fs_name)) {
-                drawer->RenderCircleFill(pu::ui::Color(46, 204, 113, 255),
-                                         list_x + DETAIL_LIST_W - 22, row_y + (DETAIL_ROW_H - 4) / 2 - 2, 7);
-            }
-
             // Multi-select marker: an always-visible box in the gutter that
             // fills in when marked. A thin edge stripe was too easy to miss
             // against the selection highlight.
@@ -808,47 +795,11 @@ namespace romm::ui {
             text_y += pu::ui::render::GetTextureHeight(panel_meta_tex) + 12;
         }
 
-        // ---- Action button, pinned to the bottom of the panel ---------------
-        const s32 btn_h = 56;
-        const s32 btn_y = y_coord + this->h - 10 - btn_h - 20;
-        const s32 btn_x = panel_x + 40;
-        const s32 btn_w = panel_w - 80;
-
-        auto model = nav->GetModel();
-        const auto* detail = model ? model->GetCachedDetail(game.id) : nullptr;
-        std::string action_label;
-        if (!detail) {
-            action_label = romm::i18n::tr("panel.action.loading");
-        } else {
-            const char* action_key = "panel.action.download";
-            switch (ComputeDownloadActionState(game.id, platform_slug, detail)) {
-                case DownloadActionState::Uninstall:   action_key = "panel.action.uninstall"; break;
-                case DownloadActionState::Queued:      action_key = "panel.action.remove_from_queue"; break;
-                case DownloadActionState::Downloading: action_key = "panel.action.downloading"; break;
-                case DownloadActionState::Failed:      action_key = "panel.action.retry"; break;
-                case DownloadActionState::AddToQueue:  action_key = "panel.action.add_to_queue"; break;
-                default:                               action_key = "panel.action.download"; break;
-            }
-            action_label = romm::i18n::tr(action_key);
-        }
-
-        if (action_label != panel_action_str || !panel_action_tex) {
-            if (panel_action_tex) pu::ui::render::DeleteTexture(panel_action_tex);
-            panel_action_str = action_label;
-            panel_action_tex = pu::ui::render::RenderText("Orbitron@24", action_label,
-                                                          pu::ui::Color(237, 229, 251, 255));
-        }
-
-        const bool btn_focused = panel_focused && !nav->IsPanelOnCover();
-        const pu::ui::Color btn_bg = btn_focused ? pu::ui::Color(120, 85, 220, 255)
-                                                 : pu::ui::Color(45, 50, 62, 255);
-        drawer->RenderRoundedRectangleFill(btn_bg, btn_x, btn_y, btn_w, btn_h, 10);
-        if (panel_action_tex) {
-            const s32 lw = pu::ui::render::GetTextureWidth(panel_action_tex);
-            const s32 lh = pu::ui::render::GetTextureHeight(panel_action_tex);
-            drawer->RenderTexture(panel_action_tex, btn_x + (btn_w - lw) / 2, btn_y + (btn_h - lh) / 2);
-        }
-
+        // The classic download/install action row was removed; the panel now
+        // only shows cover + details + description, with a keys hint at the
+        // bottom. Description fills the space between the metadata and it.
+        const s32 hint_h = 28;
+        const s32 hint_y = y_coord + this->h - 10 - hint_h;
         if (panel_keys_tex == nullptr) {
             panel_keys_tex = pu::ui::render::RenderText("Ubuntu@20",
                                                         romm::i18n::tr("hint.grid_panel"),
@@ -856,13 +807,13 @@ namespace romm::ui {
         }
         if (panel_keys_tex) {
             const s32 kw = pu::ui::render::GetTextureWidth(panel_keys_tex);
-            drawer->RenderTexture(panel_keys_tex, panel_x + (panel_w - kw) / 2, btn_y + btn_h + 6);
+            drawer->RenderTexture(panel_keys_tex, panel_x + (panel_w - kw) / 2, hint_y);
         }
 
         // Description fills whatever vertical space is left between the metadata
-        // and the button, clipped rather than allowed to run over either.
+        // and the keys hint, clipped rather than allowed to run over it.
         if (panel_desc_tex) {
-            const s32 avail_h = btn_y - 16 - text_y;
+            const s32 avail_h = hint_y - 24 - text_y;
             if (avail_h > 20) {
                 const s32 desc_h = pu::ui::render::GetTextureHeight(panel_desc_tex);
                 // Clamp the scroll to what actually overflows, so Down can't
@@ -1074,28 +1025,7 @@ namespace romm::ui {
                 DrawPlaceholderCover(drawer, GetPlaceholderCover(platform_slug), actual_x, actual_y, actual_w, actual_h);
             }
 
-            if (romm::model::ConfigManager::Instance().ShowInstalledBadge()) {
-                const auto& platforms = nav->GetModel()->GetPlatforms();
-                size_t plat_idx = nav->GetLoadedPlatformIdx();
-                if (plat_idx < platforms.size()) {
-                    const auto& current_platform = platforms.at(plat_idx);
-                    // Cached variant: IsGameInstalled() is a raw stat() syscall,
-                    // and this runs per tile per frame — ~1800 SD-card stats a
-                    // second on a full grid, whether or not anything is
-                    // downloading. The cache is cleared by
-                    // InvalidateInstallCache() on download completion/cancel and
-                    // refreshed on uninstall, so badges stay correct.
-                    if (romm::model::DownloadManager::Instance().GetCachedInstallState(current_platform.slug, game.fs_name)) {
-                        s32 dot_radius = 12;
-                        s32 dot_x = actual_x + actual_w - dot_radius - 8;
-                        s32 dot_y = actual_y + dot_radius + 8;
-                        drawer->RenderCircleFill(pu::ui::Color(46, 204, 113, 255), dot_x, dot_y, dot_radius);
-                    }
-                }
-            }
-
-            // Bulk-selection marker, mirrored to the opposite corner from the
-            // install badge so both can show at once.
+            // Bulk-selection marker (top-left corner).
             if (nav->IsBulkSelected(game.id)) {
                 const s32 mark_r = 12;
                 const s32 mark_x = actual_x + mark_r + 8;

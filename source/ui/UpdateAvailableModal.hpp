@@ -7,10 +7,9 @@ namespace romm::ui {
 
     // Shown once per session on the Main Menu when a background update check
     // (Settings > Updates > Check on startup) lands on UpdateAvailable and the
-    // user hasn't already dismissed that exact version. Mirrors
-    // UninstallConfirmModal's pattern: a stateless render-only overlay reading
-    // its visibility/content from NavigationManager, with input handled
-    // centrally in NavigationManager::HandleUpdateModalInput.
+    // user hasn't already dismissed that exact version. A stateless render-only
+    // overlay reading its visibility/content from NavigationManager, with input
+    // handled centrally in NavigationManager::HandleUpdateModalInput.
     class UpdateAvailableModal : public pu::ui::elm::Element {
     private:
         s32 x, y, w, h;

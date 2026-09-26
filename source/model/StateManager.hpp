@@ -7,7 +7,7 @@
 #include <atomic>
 #include <pthread.h>
 #include "DataModel.hpp"
-#include "FrontendTarget.hpp"
+#include "FrontendProfile.hpp"
 #include "SaveManager.hpp" // SaveVerdict
 
 namespace romm::model {
@@ -26,11 +26,10 @@ namespace romm::model {
         int rom_id = 0;
         std::string title;
         std::string platform_slug; // RomM slug (paths resolve from it)
-        SyncTarget target = SyncTarget::Tico; // which frontend this view reads
 
         // Local side (disk + sync_state.json).
         std::vector<StateSlotInfo> local_slots; // slots present on disk, sorted
-        std::string state_dir;                  // states folder for this game (per target)
+        std::string state_dir;                  // states folder for this game
         // Newest recorded state updated_at across slots; empty when never synced.
         std::string last_sync_date;
         bool synced_before = false;
@@ -59,14 +58,9 @@ namespace romm::model {
     public:
         static StateManager& Instance();
 
-        // Which frontend's states this screen reads and writes. Switching
-        // targets re-issues a Refresh from the view.
-        void SetTarget(SyncTarget target) { active_target_ = target; }
-        SyncTarget GetTarget() const { return active_target_; }
-
         // Rebuilds the platform snapshot and starts the server refresh worker.
         // While a refresh is running the call only asks the worker to park and
-        // returns: re-targeting must never block the UI thread on the fetch in
+        // returns: re-fetching must never block the UI thread on the fetch in
         // flight, so the State Data view re-issues the request once it parks.
         void Refresh(const std::vector<Game>& games, const std::string& romm_slug);
 
@@ -97,7 +91,6 @@ namespace romm::model {
         static void* Trampoline(void* arg);
 
         mutable std::mutex mutex_;
-        SyncTarget active_target_ = SyncTarget::Tico;
         StatePlatformSnapshot snapshot_;
         std::atomic<bool> refreshing_{false};
         std::atomic<bool> cancel_requested_{false};

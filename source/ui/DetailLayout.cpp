@@ -1,59 +1,16 @@
 #include "DetailLayout.hpp"
 #include "PlaceholderCover.hpp"
 #include "../model/DataModel.hpp"
-#include "../model/DownloadManager.hpp"
 #include "../navigation/NavigationManager.hpp"
 #include "CoverProfile.hpp"
 #include "CoverCache.hpp"
-#include "UninstallConfirmModal.hpp"
 #include "SyncModal.hpp"
 #include "../model/RommApi.hpp"
 #include "../model/ConfigManager.hpp"
 #include "../i18n/I18n.hpp"
 #include <sys/stat.h>
-#include "GlobalProgressBar.hpp"
 
 namespace romm::ui {
-
-    DownloadActionState ComputeDownloadActionState(int rom_id,
-                                                   const std::string& platform_slug,
-                                                   const romm::model::GameDetail* detail) {
-        auto& dl_mgr = romm::model::DownloadManager::Instance();
-        const auto task_snap = dl_mgr.GetTaskSnapshot(rom_id);
-        const auto active_snap = dl_mgr.GetActiveDownloadSnapshot();
-
-        bool installed = false;
-        if (detail) {
-            // Multi-disc games are identified on disk by their root .m3u, not
-            // the top-level fs_name (a folder).
-            const std::string check_name =
-                dl_mgr.InstallIdentityFilename(platform_slug, detail->files, detail->file_name);
-            if (!check_name.empty()) {
-                installed = dl_mgr.GetCachedInstallState(platform_slug, check_name);
-            }
-        }
-
-        using DS = romm::model::DownloadState;
-        if (installed) {
-            return DownloadActionState::Uninstall;
-        }
-        if (task_snap.rom_id == rom_id) {
-            if (task_snap.state == DS::DownloadingGame || task_snap.state == DS::DownloadingCover ||
-                task_snap.state == DS::SyncingCover || task_snap.state == DS::Preparing) {
-                return DownloadActionState::Downloading;
-            }
-            if (task_snap.state == DS::Queued) {
-                return DownloadActionState::Queued;
-            }
-            if (task_snap.state == DS::Failed || task_snap.state == DS::Cancelled) {
-                return DownloadActionState::Failed;
-            }
-        }
-        if (active_snap.rom_id != 0) {
-            return DownloadActionState::AddToQueue;
-        }
-        return DownloadActionState::Download;
-    }
 
     namespace {
         constexpr s32 TAB_Y_OFFSET = 170;
@@ -322,7 +279,6 @@ namespace romm::ui {
                   << " source_hash=" << HashString(expected_identity.cache_key.cover_source) << std::endl;
 
         ResolveDetailImageState(true);
-        ForceRefresh();
     }
 
     void DetailCard::OnLeave() {
@@ -426,19 +382,8 @@ namespace romm::ui {
         ClearTextures();
         pu::ui::Color text_color(237, 229, 251, 255); // #EDE5FB
 
-        // The action button is 430px wide; these labels are sized to fit there
-        // in every shipped language.
-        tex_btn_download = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.download"), text_color);
-        tex_btn_preparing = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.preparing"), text_color);
-        tex_btn_downloaded = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.downloaded"), text_color);
-        tex_btn_failed = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.retry"), text_color);
-        tex_btn_unsupported = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.unsupported"), text_color);
-
-        tex_btn_uninstall = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.uninstall"), text_color);
-        tex_btn_confirm_uninstall = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.confirm_uninstall"), text_color);
-        tex_btn_add_to_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.add_to_queue"), text_color);
-        tex_btn_remove_from_queue = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.remove_from_queue"), text_color);
-
+        // The sync action button is 430px wide; the label is sized to fit in
+        // every shipped language.
         tex_btn_sync = pu::ui::render::RenderText("Orbitron@30", romm::i18n::tr("detail.btn.sync"), text_color);
 
         cover_placeholder_tex = pu::ui::render::RenderText("Ubuntu@30", romm::i18n::tr("cover.no_image"), text_color);
@@ -446,27 +391,11 @@ namespace romm::ui {
     }
 
     void DetailCard::RefreshTranslations() {
-        // InitTextures() clears first, and current_dynamic_text is reset so the
-        // in-progress "DOWNLOADING 42%" label re-renders on the next frame
-        // instead of comparing equal against the old-language string.
         InitTextures();
-        current_dynamic_text.clear();
     }
 
     void DetailCard::ClearTextures() {
-        if (tex_btn_download) { pu::ui::render::DeleteTexture(tex_btn_download); tex_btn_download = nullptr; }
-        if (tex_btn_preparing) { pu::ui::render::DeleteTexture(tex_btn_preparing); tex_btn_preparing = nullptr; }
-        if (tex_btn_downloaded) { pu::ui::render::DeleteTexture(tex_btn_downloaded); tex_btn_downloaded = nullptr; }
-        if (tex_btn_failed) { pu::ui::render::DeleteTexture(tex_btn_failed); tex_btn_failed = nullptr; }
-        if (tex_btn_unsupported) { pu::ui::render::DeleteTexture(tex_btn_unsupported); tex_btn_unsupported = nullptr; }
-
-        if (tex_btn_uninstall) { pu::ui::render::DeleteTexture(tex_btn_uninstall); tex_btn_uninstall = nullptr; }
-        if (tex_btn_confirm_uninstall) { pu::ui::render::DeleteTexture(tex_btn_confirm_uninstall); tex_btn_confirm_uninstall = nullptr; }
-        if (tex_btn_add_to_queue) { pu::ui::render::DeleteTexture(tex_btn_add_to_queue); tex_btn_add_to_queue = nullptr; }
-        if (tex_btn_remove_from_queue) { pu::ui::render::DeleteTexture(tex_btn_remove_from_queue); tex_btn_remove_from_queue = nullptr; }
         if (tex_btn_sync) { pu::ui::render::DeleteTexture(tex_btn_sync); tex_btn_sync = nullptr; }
-
-        if (dynamic_download_tex) { pu::ui::render::DeleteTexture(dynamic_download_tex); dynamic_download_tex = nullptr; }
 
         if (cover_placeholder_tex) { pu::ui::render::DeleteTexture(cover_placeholder_tex); cover_placeholder_tex = nullptr; }
         if (loading_tex) { pu::ui::render::DeleteTexture(loading_tex); loading_tex = nullptr; }
@@ -955,15 +884,6 @@ namespace romm::ui {
         trailer_title_text->SetColor(pu::ui::Color(85, 63, 152, 255));
         this->Add(trailer_title_text);
 
-        auto modal = romm::ui::UninstallConfirmModal::New(nav);
-        this->Add(modal);
-
-        // Download status text
-        download_status_text = pu::ui::elm::TextBlock::New(660, 800, "");
-        download_status_text->SetFont("Ubuntu@24");
-        download_status_text->SetColor(pu::ui::Color(230, 199, 167, 255));
-        this->Add(download_status_text);
-
         // Controller Hints (Ubuntu, Light Lavender)
         hint_text = pu::ui::elm::TextBlock::New(660, 850, romm::i18n::tr("hint.detail.panel"));
         hint_text->SetFont("Ubuntu@30");
@@ -1082,15 +1002,6 @@ namespace romm::ui {
                 UpdateFooterHints();
             }
             trailer_title_text->SetText("");
-        }
-        UpdateDownloadStatus();
-    }
-
-    void DetailLayout::UpdateDownloadStatus() {
-        // Remove text-based status updates, as the visual queue system handles it via the button and global bar.
-        // We leave the function empty to satisfy any NavigationManager calls, or optionally show a small note.
-        if (download_status_text) {
-            download_status_text->SetText("");
         }
     }
 

@@ -1,0 +1,10 @@
+1. Quando fazemos upload de um save local, a aplicação passa a considerar o
+save do server como o mais recente, porque foi escrito depois do local
+(obviamente, porque enviamos a partir do local)
+
+2. A navegação está funcionando como deveria, mas ainda sinto que a navegação é
+travada. Por exemplo, apertar varias vezes o botao direito para ir de sync até
+download não é instantaneo.
+
+3. Temos um problema de entendimento entre saves e states: atualmente, estamos
+enviando nossos states como saves

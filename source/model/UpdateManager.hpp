@@ -80,6 +80,8 @@ namespace romm::model {
 
         void SetState(UpdateState new_state);
         void SetError(const std::string& err);
+        // Fallback install path when argv[0] is unavailable (flavor-specific).
+        std::string DefaultNroPath() const;
 
         std::mutex state_mutex;
         UpdateState state{UpdateState::Idle};

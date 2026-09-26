@@ -1,6 +1,5 @@
 #include "MainMenuLayout.hpp"
 #include "../navigation/NavigationManager.hpp"
-#include "GlobalProgressBar.hpp"
 #include "UpdateAvailableModal.hpp"
 #include "../model/UpdateManager.hpp"
 #include "../i18n/I18n.hpp"
@@ -169,10 +168,6 @@ namespace romm::ui {
         hint_text->SetColor(pu::ui::Color(190, 180, 225, 255)); // Light lavender (#BEB4E1)
         hint_text->SetHorizontalAlign(pu::ui::elm::HorizontalAlign::Center);
         this->Add(hint_text);
-
-        // Global Progress Bar (moved lower to y=110 to avoid clashing with top status version text)
-        auto global_progress = romm::ui::GlobalProgressBar::New(60, 110, 460, 56, nav);
-        this->Add(global_progress);
 
         // Update-available popup — added last so it renders on top of everything else
         update_modal = UpdateAvailableModal::New(nav);

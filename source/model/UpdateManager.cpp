@@ -1,6 +1,5 @@
 #include "UpdateManager.hpp"
 #include "ConfigManager.hpp"
-#include "DownloadManager.hpp"
 #include "JsonUtil.hpp"
 #include "../Version.hpp"
 #include "../i18n/I18n.hpp"
@@ -197,10 +196,16 @@ namespace romm::model {
         return total_bytes.load();
     }
 
+    // This build's own NRO/install location. argv[0] usually carries the
+    // real path; the fallback matches the flavor's install convention.
+    std::string UpdateManager::DefaultNroPath() const {
+        return std::string(frontend::AppDir()) + "/" + frontend::NroFileName();
+    }
+
     bool UpdateManager::CanRestoreBackup() const {
         std::string current_path = executable_path;
         if (current_path.empty()) {
-            current_path = "sdmc:/switch/romm-nx/romm-nx.nro";
+            current_path = DefaultNroPath();
         }
         std::string backup_path = current_path + ".bak";
         return FileExists(backup_path);
@@ -214,7 +219,7 @@ namespace romm::model {
 
         std::string current_path = executable_path;
         if (current_path.empty()) {
-            current_path = "sdmc:/switch/romm-nx/romm-nx.nro";
+            current_path = DefaultNroPath();
         }
         std::string backup_path = current_path + ".bak";
         std::string temp_new_path = current_path + ".new_tmp";
@@ -256,7 +261,7 @@ namespace romm::model {
         // a stable -> testing install would leave the config claiming a testing
         // build is running.
         std::string result_json;
-        if (ReadFileToString("sdmc:/switch/romm-nx/update/update_result.json", result_json)) {
+        if (ReadFileToString((std::string(frontend::AppDir()) + "/update/update_result.json").c_str(), result_json)) {
             std::string previous_channel;
             if (jsonExtractString(result_json, "previous_channel", previous_channel) && !previous_channel.empty()) {
                 auto& config = ConfigManager::Instance();
@@ -479,24 +484,14 @@ namespace romm::model {
     }
 
     void UpdateManager::WorkerDownloadAndInstall() {
-        // Block if game download active or queue running
-        auto active_dl = DownloadManager::Instance().GetActiveDownloadSnapshot();
-        auto dl_queue = DownloadManager::Instance().GetQueueSnapshot();
-        if (active_dl.rom_id > 0 || !dl_queue.empty()) {
-            SetError(romm::i18n::tr("update.error.downloads_active"));
-            SetState(UpdateState::Error);
-            std::lock_guard<std::mutex> lock(state_mutex);
-            install_in_progress = false;
-            return;
-        }
-
-        // Ensure directories exist
+        // Ensure directories exist (install root is flavor-specific)
         mkdir("sdmc:/switch", 0777);
-        mkdir("sdmc:/switch/romm-nx", 0777);
-        mkdir("sdmc:/switch/romm-nx/update", 0777);
+        mkdir(frontend::AppDir(), 0777);
+        const std::string update_dir = std::string(frontend::AppDir()) + "/update";
+        mkdir(update_dir.c_str(), 0777);
 
-        std::string part_path = "sdmc:/switch/romm-nx/update/romm-nx.nro.part";
-        std::string new_path = "sdmc:/switch/romm-nx/update/romm-nx.nro.new";
+        std::string part_path = update_dir + "/" + frontend::NroFileName() + ".part";
+        std::string new_path = update_dir + "/" + frontend::NroFileName() + ".new";
         
         remove(part_path.c_str());
         remove(new_path.c_str());
@@ -664,7 +659,7 @@ namespace romm::model {
 
         std::string current_app_path = executable_path;
         if (current_app_path.empty()) {
-            current_app_path = "sdmc:/switch/romm-nx/romm-nx.nro";
+            current_app_path = DefaultNroPath();
         }
         std::string backup_path = current_app_path + ".bak";
 
@@ -717,7 +712,7 @@ namespace romm::model {
         config.Save();
 
         // Write update_result.json
-        FILE* result_f = fopen("sdmc:/switch/romm-nx/update/update_result.json", "w");
+        FILE* result_f = fopen((std::string(frontend::AppDir()) + "/update/update_result.json").c_str(), "w");
         if (result_f) {
             std::string res_json = "{\n";
             res_json += "  \"status\": \"success\",\n";

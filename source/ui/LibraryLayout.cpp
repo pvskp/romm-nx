@@ -3,11 +3,9 @@
 #include "GameGrid.hpp"
 #include "AlphabetBar.hpp"
 #include "../navigation/NavigationManager.hpp"
-#include "GlobalProgressBar.hpp"
 #include "LibraryMenuModal.hpp"
 #include "SyncModal.hpp"
 #include "StatusBar.hpp"
-#include "UninstallConfirmModal.hpp"
 #include "../i18n/I18n.hpp"
 
 namespace romm::ui {
@@ -80,10 +78,6 @@ namespace romm::ui {
         // by LibraryHint so the ZR segment can light up when games are marked.
         this->Add(std::make_shared<LibraryHint>(60, 1080 - 65, nav));
 
-        // Global Progress Bar (Top left, free space)
-        auto global_progress = romm::ui::GlobalProgressBar::New(380 + 16, 14, 460, 56, nav);
-        this->Add(global_progress);
-
         // Create sidebar, alphabet bar, and grid components
         // Sidebar takes width=380, height=880 (from y=100 to y=980)
         sidebar = SidebarList::New(0, 100, 380, 880, nav);
@@ -96,12 +90,6 @@ namespace romm::ui {
         // Grid takes the remaining space below the alphabet bar
         grid = GameGrid::New(380, 180, 1920 - 380, 800, nav);
         this->Add(grid);
-
-        // Uninstall confirmation. Needed here because Detail view mode's panel
-        // can trigger an uninstall without ever leaving the Library screen —
-        // NavigationManager gates all input on uninstall_modal.active, so a
-        // layout that can raise the modal but not draw it would soft-lock.
-        this->Add(romm::ui::UninstallConfirmModal::New(nav));
 
         // Y-Menu overlay — added last so it renders on top of everything else
         library_menu_modal = LibraryMenuModal::New(nav);

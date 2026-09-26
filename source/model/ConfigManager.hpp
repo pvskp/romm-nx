@@ -4,6 +4,7 @@
 #include <map>
 #include <mutex>
 #include <vector>
+#include "FrontendProfile.hpp" // compile-time frontend identity & config keys
 
 namespace romm::model {
     
@@ -93,12 +94,6 @@ namespace romm::model {
         const std::string& GetLogLevel() const { return log_level; }
         void SetLogLevel(const std::string& level) { log_level = level; }
 
-        bool ConfirmBeforeUninstall() const { return confirm_before_uninstall; }
-        void SetConfirmBeforeUninstall(bool confirm) { confirm_before_uninstall = confirm; }
-
-        bool ShowInstalledBadge() const { return show_installed_badge; }
-        void SetShowInstalledBadge(bool show) { show_installed_badge = show; }
-
         bool ScreenAlwaysOn() const { return screen_always_on; }
         void SetScreenAlwaysOn(bool enabled) { screen_always_on = enabled; }
 
@@ -171,59 +166,21 @@ namespace romm::model {
         const std::string& GetDismissedUpdateVersion() const { return dismissed_update_version; }
         void SetDismissedUpdateVersion(const std::string& version) { dismissed_update_version = version; }
 
-        // Single configurable base directory. Games always install to
-        // <base>/roms/<system>/, so an override per platform is unnecessary.
-        const std::string& GetRomsBaseDir() const { return roms_base_dir; }
-        void SetRomsBaseDir(const std::string& dir);
-        std::string GetRomPath(const std::string& platform) const;
+        // --- frontend sync paths ----------------------------------------
+        // Root directory of the frontend this build serves (Tico or
+        // RetroArch, chosen at compile time). Everything the sync feature
+        // writes for that frontend lands under it, mirroring the real folder
+        // layout of the frontend: <base>/roms/<platform>/, per-platform or
+        // per-core saves/states, and (Tico only) assets/covers/. Configurable in config.json under
+        // the frontend's own key (frontend::ConfigKeyBaseDir); defaults to
+        // the frontend's usual SD location.
+        const std::string& GetFrontendBaseDir() const { return frontend_base_dir; }
+        void SetFrontendBaseDir(const std::string& dir);
 
-        // --- Tico sync paths --------------------------------------------
-        // Root directory of the Tico frontend on the SD card. Everything the
-        // sync feature writes lands under it, mirroring Tico's real folder
-        // layout: <base>/roms/<platform>/, <base>/saves/<platform>/ and
-        // <base>/assets/covers/<platform>/. Configurable in config.json
-        // ("tico_base_dir"), defaults to "sdmc:/tico/".
-        const std::string& GetTicoBaseDir() const { return tico_base_dir; }
-        void SetTicoBaseDir(const std::string& dir);
-        std::string GetTicoRomPath(const std::string& romm_slug) const;
-        std::string GetTicoSavePath(const std::string& romm_slug) const;
-        // Save states live one level up from saves, in Tico's states folder:
-        // <base>/states/<platform>/<game_base>.state1..9 (one file per slot).
-        std::string GetTicoStatePath(const std::string& romm_slug) const;
-        std::string GetTicoCoverPath(const std::string& romm_slug) const;
-        // One background image per game, mirroring Tico's cover layout:
-        // <base>/assets/backgrounds/<platform>/<game_base>.jpg. The base name
-        // is the ROM file name without extension (same stem the cover uses).
-        std::string GetTicoBackgroundPath(const std::string& romm_slug,
-                                          const std::string& game_base) const;
-
-        // --- RetroArch sync paths ----------------------------------------
-        // Root of the RetroArch port on the SD card ("retroarch_base_dir",
-        // defaults to "sdmc:/RetroArch/"). Saves and states live under
-        // <base>/saves/<core>/ and <base>/states/<core>/ — per core, not per
-        // platform — so the core table in RetroArchCatalog drives them.
-        const std::string& GetRetroArchBaseDir() const { return retroarch_base_dir; }
-        void SetRetroArchBaseDir(const std::string& dir);
-
-        // ROM strategy for the RetroArch target. When true (default) the
-        // target reads and writes ROMs directly in Tico's folders — one copy
-        // on the SD, two frontends loading it. When false, ROMs are synced
-        // into their own content folder below.
-        bool RetroarchReusesTicoRoms() const { return retroarch_reuse_tico_roms; }
-        void SetRetroarchReusesTicoRoms(bool reuse) { retroarch_reuse_tico_roms = reuse; }
-
-        // Content folder used when the reuse option is off
-        // ("retroarch_roms_dir", defaults to "<retroarch base>/roms/").
-        const std::string& GetRetroArchRomsDir() const { return retroarch_roms_dir; }
-        void SetRetroArchRomsDir(const std::string& dir);
-        std::string GetRetroArchRomPath(const std::string& romm_slug) const;
-
-        // Destination picked by default in the sync pre-flight modal and by
-        // the Save/State Data screens: "tico", "retroarch" or "both"
-        // ("sync_default_destination"; FrontendTarget::ParseDestination is
-        // the single parser). Defaults to "tico".
-        const std::string& GetSyncDefaultDestination() const { return sync_default_destination; }
-        void SetSyncDefaultDestination(const std::string& dest) { sync_default_destination = dest; }
+        // Separate ROMs folder (RetroArch flavor only: content lives outside
+        // the base dir). Empty for Tico, where ROMs live under the base dir.
+        const std::string& GetFrontendRomsDir() const { return frontend_roms_dir; }
+        void SetFrontendRomsDir(const std::string& dir);
 
     private:
         ConfigManager() = default;
@@ -248,8 +205,6 @@ namespace romm::model {
         int max_age_days = 30;
         bool show_build_version = true;
         std::string log_level = "info";
-        bool confirm_before_uninstall = true;
-        bool show_installed_badge = true;
         bool screen_always_on = false;
         bool filebrowser_write_anywhere = false;
         std::string startup_sound = "none";
@@ -260,21 +215,13 @@ namespace romm::model {
         // existing update_manifest_url — confirm or correct via Settings.
         std::string audio_base_url = "https://romm-nx.aaaoz.fr/romm-nx/audio/";
 
-        // Root under which every platform's games live, one subfolder per
-        // system ("roms/" + slug). Always ends in '/'.
-        std::string roms_base_dir = "sdmc:/romm-nx/";
-
-        // Root of the Tico frontend. Always ends in '/'.
-        std::string tico_base_dir = "sdmc:/tico/";
-
-        // Root of the RetroArch port. Always ends in '/'.
-        std::string retroarch_base_dir = "sdmc:/RetroArch/";
-        bool retroarch_reuse_tico_roms = true;
-        std::string retroarch_roms_dir = "sdmc:/RetroArch/roms/";
-        std::string sync_default_destination = "tico";
-
-        // Directory holding the per-channel subdirectories; always ends in '/'.
-        std::string update_base_url = "https://romm-nx.aaaoz.fr/romm-nx/";
+        // Root of the frontend this build serves (flavor-specific default).
+        std::string frontend_base_dir = frontend::DefaultBaseDir();
+        // ROMs content folder of the RetroArch flavor; unused by Tico.
+        std::string frontend_roms_dir = frontend::DefaultRomsDir();
+        // OTA update root, also flavor-specific (each build tracks its own
+        // manifest channel tree so updates never overwrite the other NRO).
+        std::string update_base_url = frontend::DefaultUpdateBaseUrl();
         std::string update_manifest_url_override;
         std::string update_channel = kChannelStable;
         std::string installed_update_channel = kChannelStable;

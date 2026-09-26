@@ -1,6 +1,5 @@
 #include "NavigationManager.hpp"
 #include "../model/ConfigManager.hpp"
-#include "../model/DownloadManager.hpp"
 #include "../model/SyncManager.hpp"
 #include "../model/SaveManager.hpp"
 #include "../model/StateManager.hpp"
@@ -20,6 +19,7 @@
 #include <sstream>
 #include <chrono>
 #include <vector>
+#include <algorithm>
 
 namespace romm::navigation {
 
@@ -65,8 +65,6 @@ namespace romm::navigation {
             default: return "Unknown";
         }
     }
-
-    // GetOptionsCountForCategory removed, using SettingsLayout::GetOptionsCount instead
 
     std::string NavigationManager::ShowKeyboard(const std::string& header, const std::string& subtext, const std::string& initial_text) {
         SwkbdConfig kbd;
@@ -187,63 +185,49 @@ namespace romm::navigation {
         UpdateLayoutSelection();
     }
 
-    void NavigationManager::HandleUninstallModalInput(u64 keys_down) {
-        if (!uninstall_modal.active) return;
-        if (keys_down & HidNpadButton_B) {
-            HideUninstallModal();
-        } else if (keys_down & HidNpadButton_A) {
-            auto& dl_mgr = romm::model::DownloadManager::Instance();
-            dl_mgr.UninstallGame(uninstall_modal.platform_slug, uninstall_modal.filename, uninstall_modal.cover_path);
-
-            // UninstallGame doesn't touch the install-state cache, and
-            // GetCachedInstallState answers from it, so anything asking "is this
-            // installed?" would keep hearing yes. The Detail card happened to
-            // dodge this by re-checking on ForceRefresh, but the library's
-            // Detail-mode panel reads the cache directly every frame.
-            dl_mgr.RefreshInstallCache(uninstall_modal.platform_slug, uninstall_modal.filename);
-
-            // Force refresh on the active layouts
-            if (detail_layout && detail_layout->GetCard()) detail_layout->GetCard()->ForceRefresh();
-
-            HideUninstallModal();
-        }
-    }
-
+        // --- Sync modal input --------------------------------------------------
+    //
+    // Pre-flight options screen first (toggles + start), then the running
+    // sync's progress modal (conflict prompt, then plain close). The option
+    // row layout mirrors SyncModal's options renderer: force ROM always,
+    // force cover / background only on the Tico flavor (kHasCoverSync), then
+    // the save-direction radio, then Start.
     void NavigationManager::HandleSyncModalInput(u64 keys_down) {
         if (!sync_modal_active) return;
 
         auto& sync = romm::model::SyncManager::Instance();
 
-        // Pre-flight options screen: the sync has not started yet.
         if (sync_modal_mode == SyncModalMode::Options) {
-            // 0 = destination, 1 = force ROM, 2 = force cover,
-            // 3 = cover as background, 4 = save direction, 5 = start.
-            static constexpr size_t kOptionRows = 6;
+            static constexpr bool kCoverRows = romm::model::frontend::kHasCoverSync;
+            const size_t saves_row = kCoverRows ? 3 : 1;
+            const size_t start_row = saves_row + 1;
+            const size_t option_rows = start_row + 1;
+
+            auto apply_row_action = [&](size_t row) {
+                if (row == 0) {
+                    sync_opt_force_rom = !sync_opt_force_rom;
+                } else if (kCoverRows && row == 1) {
+                    sync_opt_force_cover = !sync_opt_force_cover;
+                } else if (kCoverRows && row == 2) {
+                    sync_opt_background = !sync_opt_background;
+                } else if (row == saves_row) {
+                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                }
+            };
+
             if (keys_down & HidNpadButton_B) {
                 sync_modal_active = false;
                 sync_option_idx = 0;
             } else if (keys_down & HidNpadButton_Up) {
                 if (sync_option_idx > 0) sync_option_idx--;
             } else if (keys_down & HidNpadButton_Down) {
-                if (sync_option_idx + 1 < kOptionRows) sync_option_idx++;
+                if (sync_option_idx + 1 < option_rows) sync_option_idx++;
             } else if ((keys_down & HidNpadButton_Left) || (keys_down & HidNpadButton_Right)) {
-                if (sync_option_idx == 0) {
-                    sync_opt_destination = static_cast<romm::model::SyncDestination>(
-                        (static_cast<size_t>(sync_opt_destination) + 1) % 3);
-                } else if (sync_option_idx == 1) {
-                    sync_opt_force_rom = !sync_opt_force_rom;
-                } else if (sync_option_idx == 2) {
-                    sync_opt_force_cover = !sync_opt_force_cover;
-                } else if (sync_option_idx == 3) {
-                    sync_opt_background = !sync_opt_background;
-                } else if (sync_option_idx == 4) {
-                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
-                }
+                apply_row_action(sync_option_idx);
             } else if (keys_down & HidNpadButton_A) {
-                if (sync_option_idx == 5) {
+                if (sync_option_idx == start_row) {
                     // Start the sync with the chosen options.
                     romm::model::SyncOptions opts;
-                    opts.destination = sync_opt_destination;
                     opts.force_rom = sync_opt_force_rom;
                     opts.force_cover = sync_opt_force_cover;
                     opts.use_cover_as_background = sync_opt_background;
@@ -277,17 +261,8 @@ namespace romm::navigation {
                     }
                     sync_modal_mode = SyncModalMode::Progress;
                     sync_conflict_selected_idx = 0;
-                } else if (sync_option_idx == 0) {
-                    sync_opt_destination = static_cast<romm::model::SyncDestination>(
-                        (static_cast<size_t>(sync_opt_destination) + 1) % 3);
-                } else if (sync_option_idx == 1) {
-                    sync_opt_force_rom = !sync_opt_force_rom;
-                } else if (sync_option_idx == 2) {
-                    sync_opt_force_cover = !sync_opt_force_cover;
-                } else if (sync_option_idx == 3) {
-                    sync_opt_background = !sync_opt_background;
-                } else if (sync_option_idx == 4) {
-                    sync_opt_save_dir = (sync_opt_save_dir + 1) % 3;
+                } else {
+                    apply_row_action(sync_option_idx);
                 }
             }
             return;
@@ -321,6 +296,8 @@ namespace romm::navigation {
         }
     }
 
+    // --- Save Data screen --------------------------------------------------
+
     void NavigationManager::OpenSaveData() {
         current_screen = Screen::SaveData;
         save_platform_idx = 0;
@@ -334,18 +311,6 @@ namespace romm::navigation {
         save_detail_server_sel = 0;
         save_detail_action_idx = 0;
 
-        // The screen shows one frontend at a time; it starts at the configured
-        // default ("Both" resolves to Tico here, the first run target).
-        {
-            romm::model::SyncDestination def = romm::model::SyncDestination::Tico;
-            romm::model::ParseDestination(
-                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(), def);
-            romm::model::SaveManager::Instance().SetTarget(
-                def == romm::model::SyncDestination::RetroArch
-                    ? romm::model::SyncTarget::RetroArch
-                    : romm::model::SyncTarget::Tico);
-        }
-
         // Kick the first platform's refresh. If its ROMs aren't loaded yet,
         // trigger the fetch too — the view re-runs the refresh once they land.
         SelectSavePlatform();
@@ -355,51 +320,18 @@ namespace romm::navigation {
         }
     }
 
-    void NavigationManager::OpenStateData() {
-        current_screen = Screen::StateData;
-        state_platform_idx = 0;
-        state_game_idx = 0;
-        state_detail_open = false;
-        state_list_focus = 0;
-        state_action_idx = 0;
-        state_detail_rom_id = 0;
-        state_detail_focus = SaveDetailFocus::Local;
-        state_detail_actions_origin = SaveDetailFocus::Local;
-        state_detail_server_sel = 0;
-        state_detail_action_idx = 0;
-
-        // Same default-destination resolution as the Save Data screen.
-        {
-            romm::model::SyncDestination def = romm::model::SyncDestination::Tico;
-            romm::model::ParseDestination(
-                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(), def);
-            romm::model::StateManager::Instance().SetTarget(
-                def == romm::model::SyncDestination::RetroArch
-                    ? romm::model::SyncTarget::RetroArch
-                    : romm::model::SyncTarget::Tico);
-        }
-
-        // Kick the first platform's refresh. If its ROMs aren't loaded yet,
-        // trigger the fetch too — the view re-runs the refresh once they land.
-        SelectStatePlatform();
-
-        if (state_data_layout) {
-            app->LoadLayout(state_data_layout);
-        }
-    }
-
-    // Switches the State Data platform cursor: fetches ROMs on demand and
-    // re-targets the StateManager refresh at the newly selected platform.
-    void NavigationManager::SelectStatePlatform() {
+    // Switches the Save Data platform cursor: fetches ROMs on demand and
+    // re-issues the SaveManager refresh at the newly selected platform.
+    void NavigationManager::SelectSavePlatform() {
         const auto& platforms = model->GetPlatforms();
-        if (state_platform_idx >= platforms.size()) return;
-        const auto& plat = platforms[state_platform_idx];
+        if (save_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[save_platform_idx];
         if (plat.games.empty()) {
             auto main_app = static_cast<romm::ui::MainApplication*>(app);
             main_app->TriggerFetchRoms(std::stoi(plat.id));
         }
-        romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
-        std::cout << "[NAV] [STATES] Platform -> " << plat.name << std::endl;
+        romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [SAVES] Platform -> " << plat.name << std::endl;
     }
 
     void NavigationManager::HandleSaveDataInput(u64 keys_down, u64 keys_effective) {
@@ -421,22 +353,6 @@ namespace romm::navigation {
 
         const size_t plat_count = platforms.size();
         const auto& plat = platforms[save_platform_idx < plat_count ? save_platform_idx : 0];
-
-        // L/R switches the screen's frontend (which saves are listed and
-        // where transfers land). Blocked inside the per-game view: finish or
-        // close it first so the cards can't describe one frontend's file
-        // while the header already names the other.
-        if (!save_detail_open &&
-            ((keys_down & HidNpadButton_L) || (keys_down & HidNpadButton_R))) {
-            auto& save_mgr = romm::model::SaveManager::Instance();
-            save_mgr.SetTarget(save_mgr.GetTarget() == romm::model::SyncTarget::Tico
-                                   ? romm::model::SyncTarget::RetroArch
-                                   : romm::model::SyncTarget::Tico);
-            std::cout << "[NAV] [SAVES] Target -> "
-                      << romm::model::TargetName(save_mgr.GetTarget()) << std::endl;
-            SelectSavePlatform(); // re-issues the refresh under the new target
-            return;
-        }
 
         // ---- Per-game comparison view ------------------------------------
         if (save_detail_open) {
@@ -493,8 +409,7 @@ namespace romm::navigation {
                             std::cout << "[NAV] [SAVES] Downloading server save "
                                       << save.file_name << " for rom " << save_detail_rom_id << std::endl;
                             auto& sync = romm::model::SyncManager::Instance();
-                            sync.StartSpecificSaveDownload(save_detail_rom_id, plat.slug, game->title, save,
-                                                           romm::model::SaveManager::Instance().GetTarget());
+                            sync.StartSpecificSaveDownload(save_detail_rom_id, plat.slug, game->title, save);
                             sync_modal_active = true;
                             sync_modal_mode = SyncModalMode::Progress;
                             save_rescan_pending = true;
@@ -514,11 +429,6 @@ namespace romm::navigation {
                     if (game) {
                         romm::model::SyncOptions opts;
                         opts.saves_only = true;
-                        opts.destination =
-                            (romm::model::SaveManager::Instance().GetTarget()
-                                 == romm::model::SyncTarget::Tico)
-                                ? romm::model::SyncDestination::Tico
-                                : romm::model::SyncDestination::RetroArch;
                         if (save_detail_action_idx == 1) opts.force_save_upload = true;
                         else if (save_detail_action_idx == 2) opts.force_save_download = true;
 
@@ -647,11 +557,6 @@ namespace romm::navigation {
 
                 romm::model::SyncOptions opts;
                 opts.saves_only = true;
-                opts.destination =
-                    (romm::model::SaveManager::Instance().GetTarget()
-                         == romm::model::SyncTarget::Tico)
-                        ? romm::model::SyncDestination::Tico
-                        : romm::model::SyncDestination::RetroArch;
                 if (save_action_idx == 1) opts.force_save_upload = true;
                 else if (save_action_idx == 2) opts.force_save_download = true;
 
@@ -664,6 +569,44 @@ namespace romm::navigation {
                           << " on " << plat.slug << " games=" << games.size() << std::endl;
             }
         }
+    }
+
+    // --- State Data screen (mirror of the Save Data screen) ----------------
+
+    void NavigationManager::OpenStateData() {
+        current_screen = Screen::StateData;
+        state_platform_idx = 0;
+        state_game_idx = 0;
+        state_detail_open = false;
+        state_list_focus = 0;
+        state_action_idx = 0;
+        state_detail_rom_id = 0;
+        state_detail_focus = SaveDetailFocus::Local;
+        state_detail_actions_origin = SaveDetailFocus::Local;
+        state_detail_server_sel = 0;
+        state_detail_action_idx = 0;
+
+        // Kick the first platform's refresh. If its ROMs aren't loaded yet,
+        // trigger the fetch too — the view re-runs the refresh once they land.
+        SelectStatePlatform();
+
+        if (state_data_layout) {
+            app->LoadLayout(state_data_layout);
+        }
+    }
+
+    // Switches the State Data platform cursor: fetches ROMs on demand and
+    // re-issues the StateManager refresh at the newly selected platform.
+    void NavigationManager::SelectStatePlatform() {
+        const auto& platforms = model->GetPlatforms();
+        if (state_platform_idx >= platforms.size()) return;
+        const auto& plat = platforms[state_platform_idx];
+        if (plat.games.empty()) {
+            auto main_app = static_cast<romm::ui::MainApplication*>(app);
+            main_app->TriggerFetchRoms(std::stoi(plat.id));
+        }
+        romm::model::StateManager::Instance().Refresh(plat.games, plat.slug);
+        std::cout << "[NAV] [STATES] Platform -> " << plat.name << std::endl;
     }
 
     void NavigationManager::HandleStateDataInput(u64 keys_down, u64 keys_effective) {
@@ -685,20 +628,6 @@ namespace romm::navigation {
 
         const size_t plat_count = platforms.size();
         const auto& plat = platforms[state_platform_idx < plat_count ? state_platform_idx : 0];
-
-        // L/R switches the screen's frontend (which states are listed and
-        // where transfers land), mirroring the Save Data screen.
-        if (!state_detail_open &&
-            ((keys_down & HidNpadButton_L) || (keys_down & HidNpadButton_R))) {
-            auto& state_mgr = romm::model::StateManager::Instance();
-            state_mgr.SetTarget(state_mgr.GetTarget() == romm::model::SyncTarget::Tico
-                                    ? romm::model::SyncTarget::RetroArch
-                                    : romm::model::SyncTarget::Tico);
-            std::cout << "[NAV] [STATES] Target -> "
-                      << romm::model::TargetName(state_mgr.GetTarget()) << std::endl;
-            SelectStatePlatform(); // re-issues the refresh under the new target
-            return;
-        }
 
         // ---- Per-game comparison view ------------------------------------
         if (state_detail_open) {
@@ -755,8 +684,7 @@ namespace romm::navigation {
                             std::cout << "[NAV] [STATES] Downloading server state "
                                       << state.file_name << " for rom " << state_detail_rom_id << std::endl;
                             auto& sync = romm::model::SyncManager::Instance();
-                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state,
-                                                            romm::model::StateManager::Instance().GetTarget());
+                            sync.StartSpecificStateDownload(state_detail_rom_id, plat.slug, game->title, state);
                             sync_modal_active = true;
                             sync_modal_mode = SyncModalMode::Progress;
                             state_rescan_pending = true;
@@ -776,11 +704,6 @@ namespace romm::navigation {
                     if (game) {
                         romm::model::SyncOptions opts;
                         opts.states_only = true;
-                        opts.destination =
-                            (romm::model::StateManager::Instance().GetTarget()
-                                 == romm::model::SyncTarget::Tico)
-                                ? romm::model::SyncDestination::Tico
-                                : romm::model::SyncDestination::RetroArch;
                         if (state_detail_action_idx == 1) opts.force_state_upload = true;
                         else if (state_detail_action_idx == 2) opts.force_state_download = true;
 
@@ -908,11 +831,6 @@ namespace romm::navigation {
 
                 romm::model::SyncOptions opts;
                 opts.states_only = true;
-                opts.destination =
-                    (romm::model::StateManager::Instance().GetTarget()
-                         == romm::model::SyncTarget::Tico)
-                        ? romm::model::SyncDestination::Tico
-                        : romm::model::SyncDestination::RetroArch;
                 if (state_action_idx == 1) opts.force_state_upload = true;
                 else if (state_action_idx == 2) opts.force_state_download = true;
 
@@ -927,19 +845,7 @@ namespace romm::navigation {
         }
     }
 
-    // Switches the Save Data platform cursor: fetches ROMs on demand and
-    // re-targets the SaveManager refresh at the newly selected platform.
-    void NavigationManager::SelectSavePlatform() {
-        const auto& platforms = model->GetPlatforms();
-        if (save_platform_idx >= platforms.size()) return;
-        const auto& plat = platforms[save_platform_idx];
-        if (plat.games.empty()) {
-            auto main_app = static_cast<romm::ui::MainApplication*>(app);
-            main_app->TriggerFetchRoms(std::stoi(plat.id));
-        }
-        romm::model::SaveManager::Instance().Refresh(plat.games, plat.slug);
-        std::cout << "[NAV] [SAVES] Platform -> " << plat.name << std::endl;
-    }
+    // --- Library Y-Menu / preview / bulk mark -------------------------------
 
     void NavigationManager::HandleLibraryMenuInput(u64 keys_down) {
         if (!library_menu_active) return;
@@ -1007,8 +913,8 @@ namespace romm::navigation {
             selected_letter_idx = 0;
             ClearSearch();
             // Bulk marks deliberately survive hovering across platforms: a
-            // selection made on one platform stays visible (and downloadable
-            // with ZR) no matter where the cursor moves.
+            // selection made on one platform stays visible (and synced with
+            // ZR) no matter where the cursor moves.
         }
 
         if (plat.games.empty()) {
@@ -1076,8 +982,8 @@ namespace romm::navigation {
     }
 
     void NavigationManager::OpenBulkSyncOptions(const std::string& platform_slug,
-                                            const std::string& platform_name,
-                                            const std::vector<romm::model::SyncGameEntry>& games) {
+                                                const std::string& platform_name,
+                                                const std::vector<romm::model::SyncGameEntry>& games) {
         sync_bulk_platform_slug = platform_slug;
         sync_bulk_platform_name = platform_name;
         sync_bulk_games = games;
@@ -1089,13 +995,10 @@ namespace romm::navigation {
         sync_opt_force_cover = false;
         sync_opt_background = false;
         sync_opt_save_dir = 0;
-        // The destination radio starts at the configured default every time
-        // the pre-flight opens.
-        romm::model::ParseDestination(
-            romm::model::ConfigManager::Instance().GetSyncDefaultDestination(),
-            sync_opt_destination);
         sync_conflict_selected_idx = 0;
     }
+
+    // --- Startup update popup -----------------------------------------------
 
     void NavigationManager::HandleUpdateModalInput(u64 keys_down) {
         if (!update_modal_active) return;
@@ -1134,71 +1037,6 @@ namespace romm::navigation {
         }
     }
 
-    void NavigationManager::ApplyPlatformVisibilityChange() {
-        if (!model) return;
-
-        pending_mark_platform = false;
-        pending_mark_platform_id.clear();
-
-        // Anchor on platform ids, not indices: the filter reorders the list, so
-        // an index that was valid a moment ago can point at a different
-        // platform (or nothing) afterwards.
-        std::string loaded_id;
-        std::string selected_id;
-        {
-            const auto& before = model->GetPlatforms();
-            if (loaded_platform_idx < before.size()) loaded_id = before[loaded_platform_idx].id;
-            if (selected_platform_idx < before.size()) selected_id = before[selected_platform_idx].id;
-        }
-
-        model->RebuildVisiblePlatforms();
-
-        const auto& after = model->GetPlatforms();
-        if (after.empty()) {
-            // Everything hidden: park on 0 and let the sidebar/grid draw their
-            // empty states. Nothing indexes into the list in that state.
-            loaded_platform_idx = 0;
-            selected_platform_idx = 0;
-            selected_game_idx = 0;
-            selected_letter_idx = 0;
-            ClearSearch();
-            ClearBulkSelection();
-        } else {
-            // Nearest still-visible entry when the anchor itself disappeared —
-            // indices only shift downwards under a filter, so clamping to the
-            // last valid index is the closest surviving neighbour.
-            auto resolve = [&after](const std::string& id, size_t fallback) -> size_t {
-                for (size_t i = 0; i < after.size(); ++i) {
-                    if (after[i].id == id) return i;
-                }
-                return (fallback < after.size()) ? fallback : after.size() - 1;
-            };
-
-            const size_t new_loaded = resolve(loaded_id, loaded_platform_idx);
-            selected_platform_idx = resolve(selected_id, selected_platform_idx);
-
-            const bool loaded_platform_survived = (!loaded_id.empty() && after[new_loaded].id == loaded_id);
-            loaded_platform_idx = new_loaded;
-            if (!loaded_platform_survived) {
-                // A different platform's games are about to be shown; the
-                // per-platform selection, filter and marks no longer apply.
-                selected_game_idx = 0;
-                selected_letter_idx = 0;
-                ClearSearch();
-                ClearBulkSelection();
-            }
-        }
-
-        if (library_layout) {
-            // The grid caches by platform index, which can survive this change
-            // unchanged while pointing at a different platform.
-            if (auto grid = library_layout->GetGameGrid()) {
-                grid->InvalidatePlatformCache();
-            }
-            library_layout->OnSelectionUpdated();
-        }
-    }
-
     void NavigationManager::PollUpdateNotification() {
         if (update_modal_active || update_popup_shown_this_session) return;
         if (current_screen != Screen::MainMenu) return; // don't yank a popup over whatever else the user's doing
@@ -1217,18 +1055,69 @@ namespace romm::navigation {
         std::cout << "[NAV] [UPDATE POPUP] Showing for version " << manifest.version << std::endl;
     }
 
+    // Re-anchors the library cursor after the platform visibility filter
+    // changed underneath it (Settings > Platforms hide/show). Kept for
+    // parity with the model's RebuildVisiblePlatforms(); nothing in the UI
+    // exposes the filter anymore, so it only ever runs with an unchanged list.
+    void NavigationManager::ApplyPlatformVisibilityChange() {
+        if (!model) return;
+
+        pending_mark_platform = false;
+        pending_mark_platform_id.clear();
+
+        std::string loaded_id;
+        std::string selected_id;
+        {
+            const auto& before = model->GetPlatforms();
+            if (loaded_platform_idx < before.size()) loaded_id = before[loaded_platform_idx].id;
+            if (selected_platform_idx < before.size()) selected_id = before[selected_platform_idx].id;
+        }
+
+        model->RebuildVisiblePlatforms();
+
+        const auto& after = model->GetPlatforms();
+        if (after.empty()) {
+            loaded_platform_idx = 0;
+            selected_platform_idx = 0;
+            selected_game_idx = 0;
+            selected_letter_idx = 0;
+            ClearSearch();
+            ClearBulkSelection();
+        } else {
+            auto resolve = [&after](const std::string& id, size_t fallback) -> size_t {
+                for (size_t i = 0; i < after.size(); ++i) {
+                    if (after[i].id == id) return i;
+                }
+                return (fallback < after.size()) ? fallback : after.size() - 1;
+            };
+
+            const size_t new_loaded = resolve(loaded_id, loaded_platform_idx);
+            selected_platform_idx = resolve(selected_id, selected_platform_idx);
+
+            const bool loaded_platform_survived = (!loaded_id.empty() && after[new_loaded].id == loaded_id);
+            loaded_platform_idx = new_loaded;
+            if (!loaded_platform_survived) {
+                selected_game_idx = 0;
+                selected_letter_idx = 0;
+                ClearSearch();
+                ClearBulkSelection();
+            }
+        }
+
+        if (library_layout) {
+            if (auto grid = library_layout->GetGameGrid()) {
+                grid->InvalidatePlatformCache();
+            }
+            library_layout->OnSelectionUpdated();
+        }
+    }
+
     void NavigationManager::HandleInput(const u64 keys_down, const u64 keys_held) {
         static auto last_transition_time = std::chrono::high_resolution_clock::time_point();
         auto now = std::chrono::high_resolution_clock::now();
 
         if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_transition_time).count() < 200) {
             return; // Ignore input immediately after screen transitions to prevent bounce
-        }
-
-        // Block all background input if modal is active
-        if (uninstall_modal.active) {
-            HandleUninstallModalInput(keys_down);
-            return;
         }
 
         if (sync_modal_active) {
@@ -1396,9 +1285,10 @@ namespace romm::navigation {
                     state_changed = true;
                 }
             }
-            // ZR opens the sync pre-flight for every selected game (ROM + saves +
-            // cover to the Tico folders), so batch options like "cover as
-            // platform background" can be toggled before anything runs.
+            // ZR opens the sync pre-flight for every selected game (ROM +
+            // saves, plus cover only on the Tico build), so batch options
+            // like "cover as platform background" can be toggled before
+            // anything runs.
             // Marks survive moving across platforms, so the batch is collected
             // from every platform, each game carrying its own platform slug.
             // Chosen over A-with-modifier because it can't be hit by accident
@@ -1665,29 +1555,21 @@ namespace romm::navigation {
                     state_changed = true;
                     std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Detail Panel -> Game List" << std::endl;
                 }
-                // Down: leave the cover for the action row, then scroll the
-                // description. Up reverses it, ending back on the cover.
+                // Down/Up scroll the description (the panel has no action row
+                // anymore); A opens the cover fullscreen, B/Left returns to
+                // the game list.
                 else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    if (panel_on_cover) {
-                        panel_on_cover = false;
-                    } else {
-                        panel_desc_scroll += 28;
-                    }
+                    panel_desc_scroll += 28;
                     state_changed = true;
                 }
                 else if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
                     if (panel_desc_scroll > 0) {
                         panel_desc_scroll -= 28;
                         if (panel_desc_scroll < 0) panel_desc_scroll = 0;
-                    } else {
-                        panel_on_cover = true;
+                        state_changed = true;
                     }
-                    state_changed = true;
                 }
-                // A on the cover opens it fullscreen, where L/R cycle miximage
-                // and large cover exactly as from the Detail screen. A on the
-                // action row runs the download/uninstall action below.
-                else if ((keys_down & HidNpadButton_A) && panel_on_cover) {
+                else if (keys_down & HidNpadButton_A) {
                     if (selected_game_idx < filtered_count && fullscreen_image_layout) {
                         const auto& game = current_platform.games[filtered_indices[selected_game_idx]];
                         const std::string slug = romm::model::NormalizePlatformSlug(current_platform.slug);
@@ -1723,46 +1605,6 @@ namespace romm::navigation {
                             app->LoadLayout(fullscreen_image_layout);
                             state_changed = true;
                             std::cout << "[NAV] [LAYOUT TRANSITION] Library Panel -> Fullscreen Image" << std::endl;
-                        }
-                    }
-                }
-                else if (keys_down & HidNpadButton_A) {
-                    if (selected_game_idx >= filtered_count) {
-                        // Filter changed under us; nothing to act on.
-                    } else {
-                        const auto& game = current_platform.games[filtered_indices[selected_game_idx]];
-                        const int rom_id = game.id;
-                        const std::string slug = romm::model::NormalizePlatformSlug(current_platform.slug);
-                        const auto* detail = model->GetCachedDetail(rom_id);
-
-                        if (!detail) {
-                            // The debounced prefetch hasn't landed yet. Downloading
-                            // needs the file list (multi-disc games resolve their
-                            // on-disk identity from it), so there's nothing safe to
-                            // do but wait — the panel says as much.
-                            std::cerr << "[NAV] Panel action ignored: detail not loaded for rom " << rom_id << std::endl;
-                        } else {
-                            auto& dl_mgr = romm::model::DownloadManager::Instance();
-                            const auto action = romm::ui::ComputeDownloadActionState(rom_id, slug, detail);
-
-                            if (action == romm::ui::DownloadActionState::Uninstall) {
-                                UninstallModalPayload p;
-                                p.rom_id = rom_id;
-                                p.platform_slug = slug;
-                                p.title = game.title;
-                                p.filename = dl_mgr.InstallIdentityFilename(slug, detail->files, detail->file_name);
-                                p.cover_path = game.cover_path;
-                                p.source_screen = current_screen;
-                                ShowUninstallModal(p);
-                            } else if (action == romm::ui::DownloadActionState::Queued) {
-                                dl_mgr.RemoveFromQueue(rom_id);
-                            } else if (action == romm::ui::DownloadActionState::Failed) {
-                                dl_mgr.RetryFailed(rom_id);
-                            } else if (action == romm::ui::DownloadActionState::Download ||
-                                       action == romm::ui::DownloadActionState::AddToQueue) {
-                                dl_mgr.EnqueueDownload(*detail, slug, game.title);
-                            }
-                            state_changed = true;
                         }
                     }
                 }
@@ -1843,9 +1685,6 @@ namespace romm::navigation {
                             sync_opt_force_cover = false;
                             sync_opt_background = false;
                             sync_opt_save_dir = 0;
-                            romm::model::ParseDestination(
-                                romm::model::ConfigManager::Instance().GetSyncDefaultDestination(),
-                                sync_opt_destination);
                             sync_conflict_selected_idx = 0;
                             sync_bulk_pending = false;
                             std::cout << "[NAV] [SYNC] Sync options opened for rom_id=" << rom_id << std::endl;

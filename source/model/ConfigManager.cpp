@@ -2,9 +2,6 @@
 #include "RomPathManager.hpp"
 #include "JsonUtil.hpp"
 #include "DataModel.hpp"
-#include "TicoCatalog.hpp"
-#include "RetroArchCatalog.hpp"
-#include "FrontendTarget.hpp"
 #include "../i18n/I18n.hpp"
 #include <cstdio>
 #include <iostream>
@@ -128,66 +125,29 @@ namespace romm::model {
         platform_grid_view_mode[norm] = m;
     }
 
-    void ConfigManager::SetRomsBaseDir(const std::string& dir) {
-        roms_base_dir = dir;
-        if (!roms_base_dir.empty() && roms_base_dir.back() != '/') {
-            roms_base_dir += "/";
+    void ConfigManager::SetFrontendBaseDir(const std::string& dir) {
+        frontend_base_dir = dir;
+        if (!frontend_base_dir.empty() && frontend_base_dir.back() != '/') {
+            frontend_base_dir += "/";
         }
     }
 
-    std::string ConfigManager::GetRomPath(const std::string& platform) const {
-        return roms_base_dir + "roms/" + NormalizePlatformSlug(platform) + "/";
-    }
-
-    void ConfigManager::SetTicoBaseDir(const std::string& dir) {
-        tico_base_dir = dir;
-        if (!tico_base_dir.empty() && tico_base_dir.back() != '/') {
-            tico_base_dir += "/";
+    void ConfigManager::SetFrontendRomsDir(const std::string& dir) {
+        frontend_roms_dir = dir;
+        if (!frontend_roms_dir.empty() && frontend_roms_dir.back() != '/') {
+            frontend_roms_dir += "/";
         }
-    }
-
-    std::string ConfigManager::GetTicoRomPath(const std::string& romm_slug) const {
-        return tico_base_dir + "roms/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
-    }
-
-    std::string ConfigManager::GetTicoSavePath(const std::string& romm_slug) const {
-        return tico_base_dir + "saves/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
-    }
-
-    std::string ConfigManager::GetTicoStatePath(const std::string& romm_slug) const {
-        return tico_base_dir + "states/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
-    }
-
-    std::string ConfigManager::GetTicoCoverPath(const std::string& romm_slug) const {
-        return tico_base_dir + "assets/covers/" + romm::model::ResolveTicoPlatformSlug(romm_slug) + "/";
-    }
-
-    std::string ConfigManager::GetTicoBackgroundPath(const std::string& romm_slug,
-                                                     const std::string& game_base) const {
-        return tico_base_dir + "assets/backgrounds/" + romm::model::ResolveTicoPlatformSlug(romm_slug) +
-               "/" + game_base + ".jpg";
-    }
-
-    void ConfigManager::SetRetroArchBaseDir(const std::string& dir) {
-        retroarch_base_dir = dir;
-        if (!retroarch_base_dir.empty() && retroarch_base_dir.back() != '/') {
-            retroarch_base_dir += "/";
-        }
-    }
-
-    void ConfigManager::SetRetroArchRomsDir(const std::string& dir) {
-        retroarch_roms_dir = dir;
-        if (!retroarch_roms_dir.empty() && retroarch_roms_dir.back() != '/') {
-            retroarch_roms_dir += "/";
-        }
-    }
-
-    std::string ConfigManager::GetRetroArchRomPath(const std::string& romm_slug) const {
-        return retroarch_roms_dir + ResolveRetroArchPlatformSlug(romm_slug) + "/";
     }
 
     bool ConfigManager::Load() {
-        std::string path = "sdmc:/switch/romm-nx/config.json";
+        // Make sure this build's app folder exists on the SD before anything
+        // else: the very first launch has no config file yet, and the folder
+        // must be in place for the user (and for the Save that follows the
+        // initial setup) even before any file is written.
+        mkdir("sdmc:/switch", 0777);
+        mkdir(frontend::AppDir(), 0777);
+
+        std::string path = std::string(frontend::AppDir()) + "/config.json";
         FILE* f = fopen(path.c_str(), "r");
         if (!f) {
             // Fallback to local config for testing
@@ -196,8 +156,18 @@ namespace romm::model {
         }
 
         if (!f) {
+            // First launch on the console: seed a default config.json in this
+            // build's folder (host/api_key empty, everything else at its
+            // default), so the file the user is expected to fill in exists
+            // and the folder visibly holds the app's data.
+            Save();
+            path = std::string(frontend::AppDir()) + "/config.json";
+            f = fopen(path.c_str(), "r");
+        }
+
+        if (!f) {
             is_valid = false;
-            error_message = "Config file sdmc:/switch/romm-nx/config.json not found";
+            error_message = std::string("Config file ") + frontend::AppDir() + "/config.json not found";
             std::cerr << "[CONFIG] Error: " << error_message << std::endl;
             return false;
         }
@@ -280,8 +250,6 @@ namespace romm::model {
         jsonExtractInt(content, "max_age_days", max_age_days);
         jsonExtractBool(content, "show_build_version", show_build_version);
         jsonExtractString(content, "log_level", log_level);
-        jsonExtractBool(content, "confirm_before_uninstall", confirm_before_uninstall);
-        jsonExtractBool(content, "show_installed_badge", show_installed_badge);
         jsonExtractBool(content, "screen_always_on", screen_always_on);
         jsonExtractBool(content, "filebrowser_write_anywhere", filebrowser_write_anywhere);
 
@@ -361,47 +329,26 @@ namespace romm::model {
             }
         }
 
-        // A single configurable base directory covers every platform; per-system
-        // overrides were removed in favour of <base>/roms/<system>/.
-        std::string base_dir;
-        if (jsonExtractString(content, "roms_base_dir", base_dir) && !base_dir.empty()) {
-            SetRomsBaseDir(base_dir);
-            if (!romm::model::RomPathManager::ValidatePath(roms_base_dir)) {
-                roms_base_dir = "sdmc:/romm-nx/";
+        // This build's frontend root directory, stored under the flavor's own
+        // config key (tico_base_dir / retroarch_base_dir). Absent on configs
+        // written before the feature — the constructor default stands.
+        std::string frontend_dir;
+        if (jsonExtractString(content, frontend::ConfigKeyBaseDir(), frontend_dir) && !frontend_dir.empty()) {
+            SetFrontendBaseDir(frontend_dir);
+            if (!romm::model::RomPathManager::ValidatePath(frontend_base_dir)) {
+                frontend_base_dir = frontend::DefaultBaseDir();
             }
         }
 
-        // Tico base directory. Absent on configs written before this feature —
-        // then the constructor default ("sdmc:/tico/") stands.
-        std::string tico_dir;
-        if (jsonExtractString(content, "tico_base_dir", tico_dir) && !tico_dir.empty()) {
-            SetTicoBaseDir(tico_dir);
-            if (!romm::model::RomPathManager::ValidatePath(tico_base_dir)) {
-                tico_base_dir = "sdmc:/tico/";
-            }
-        }
-
-        // RetroArch target settings. All absent on configs written before
-        // this feature — the constructor defaults stand (reuse Tico's ROM
-        // folders, base "sdmc:/RetroArch/").
-        std::string ra_dir;
-        if (jsonExtractString(content, "retroarch_base_dir", ra_dir) && !ra_dir.empty()) {
-            SetRetroArchBaseDir(ra_dir);
-            if (!romm::model::RomPathManager::ValidatePath(retroarch_base_dir)) {
-                retroarch_base_dir = "sdmc:/RetroArch/";
-            }
-        }
-        jsonExtractBool(content, "retroarch_reuse_tico_roms", retroarch_reuse_tico_roms);
-        std::string ra_roms;
-        if (jsonExtractString(content, "retroarch_roms_dir", ra_roms) && !ra_roms.empty()) {
-            SetRetroArchRomsDir(ra_roms);
-        }
-        // Unknown tokens fall back to the constructor default via ParseDestination.
-        std::string dest_str;
-        if (jsonExtractString(content, "sync_default_destination", dest_str)) {
-            SyncDestination parsed;
-            if (ParseDestination(dest_str, parsed)) {
-                sync_default_destination = DestinationId(parsed);
+        // The RetroArch flavor keeps ROMs in its own content folder, stored
+        // under retroarch_roms_dir. The Tico flavor has no separate setting.
+        if (frontend::kHasRomsDirSetting) {
+            std::string roms_dir;
+            if (jsonExtractString(content, frontend::ConfigKeyRomsDir(), roms_dir) && !roms_dir.empty()) {
+                SetFrontendRomsDir(roms_dir);
+                if (!romm::model::RomPathManager::ValidatePath(frontend_roms_dir)) {
+                    frontend_roms_dir = frontend::DefaultRomsDir();
+                }
             }
         }
 
@@ -422,11 +369,12 @@ namespace romm::model {
     bool ConfigManager::Save() {
         std::lock_guard<std::mutex> lock(save_mutex);
 
-        // Attempt to create switch and romm-nx directories on SD card
+        // Attempt to create the app folder on the SD card (the install root
+        // is flavor-specific, e.g. sdmc:/switch/romm-nx-tico/).
         mkdir("sdmc:/switch", 0777);
-        mkdir("sdmc:/switch/romm-nx", 0777);
+        mkdir(frontend::AppDir(), 0777);
 
-        std::string path = "sdmc:/switch/romm-nx/config.json";
+        std::string path = std::string(frontend::AppDir()) + "/config.json";
         FILE* f = fopen(path.c_str(), "w");
         if (!f) {
             // Fallback to local config for testing
@@ -444,10 +392,10 @@ namespace romm::model {
             romm_host = romm_host.substr(0, romm_host.size() - 1);
         }
 
-        // Generate JSON output
+        // Generate JSON output. The connection lives in the nested block
+        // below — the top-level romm_host/api_key copies were dropped (Load
+        // still accepts them for files written by older builds).
         std::string content = "{\n";
-        content += "  \"romm_host\": \"" + romm_host + "\",\n";
-        content += "  \"api_key\": \"" + api_key + "\",\n";
         content += "  \"language\": \"" + language + "\",\n";
         content += "  \"theme\": \"" + theme + "\",\n";
         content += "  \"platform_selector_style\": \"" + GetPlatformSelectorStyleString() + "\",\n";
@@ -467,12 +415,10 @@ namespace romm::model {
         content += "    \"server_url\": \"" + romm_host + "\",\n";
         content += "    \"api_key\": \"" + api_key + "\"\n";
         content += "  },\n";
-        content += "  \"roms_base_dir\": \"" + roms_base_dir + "\",\n";
-        content += "  \"tico_base_dir\": \"" + tico_base_dir + "\",\n";
-        content += "  \"retroarch_base_dir\": \"" + retroarch_base_dir + "\",\n";
-        content += "  \"retroarch_reuse_tico_roms\": " + std::string(retroarch_reuse_tico_roms ? "true" : "false") + ",\n";
-        content += "  \"retroarch_roms_dir\": \"" + retroarch_roms_dir + "\",\n";
-        content += "  \"sync_default_destination\": \"" + sync_default_destination + "\",\n";
+        content += "  \"" + std::string(frontend::ConfigKeyBaseDir()) + "\": \"" + frontend_base_dir + "\",\n";
+        if (frontend::kHasRomsDirSetting) {
+            content += "  \"" + std::string(frontend::ConfigKeyRomsDir()) + "\": \"" + frontend_roms_dir + "\",\n";
+        }
         content += "  \"cache\": {\n";
         content += "    \"auto_clear_enabled\": " + std::string(auto_clear_enabled ? "true" : "false") + ",\n";
         content += "    \"max_size_mb\": " + std::to_string(max_size_mb) + ",\n";
@@ -482,8 +428,6 @@ namespace romm::model {
         content += "    \"show_build_version\": " + std::string(show_build_version ? "true" : "false") + ",\n";
         content += "    \"log_level\": \"" + log_level + "\"\n";
         content += "  },\n";
-        content += "  \"confirm_before_uninstall\": " + std::string(confirm_before_uninstall ? "true" : "false") + ",\n";
-        content += "  \"show_installed_badge\": " + std::string(show_installed_badge ? "true" : "false") + ",\n";
         content += "  \"screen_always_on\": " + std::string(screen_always_on ? "true" : "false") + ",\n";
         content += "  \"filebrowser_write_anywhere\": " + std::string(filebrowser_write_anywhere ? "true" : "false") + ",\n";
         content += "  \"startup_sound\": \"" + startup_sound + "\",\n";
@@ -492,11 +436,14 @@ namespace romm::model {
         content += "  \"ambient_volume\": " + std::to_string(ambient_volume) + ",\n";
         content += "  \"audio_base_url\": \"" + audio_base_url + "\",\n";
         content += "  \"update_base_url\": \"" + update_base_url + "\",\n";
-        // The resolved URL for the tracked channel, kept in the same key older
-        // builds read so a backup NRO restored later still checks for updates.
-        // Load() turns it back into a base + channel, or keeps it as an
-        // override when it doesn't follow the channel convention.
-        content += "  \"update_manifest_url\": \"" + GetUpdateManifestUrl() + "\",\n";
+        // The resolved manifest URL is derived (base + channel); it is only
+        // persisted when the user pinned a custom endpoint by hand (an URL
+        // that does not follow the channel convention) so that override
+        // survives saves. Load() still accepts the key on files written by
+        // older builds and maps it back to base + channel.
+        if (!update_manifest_url_override.empty()) {
+            content += "  \"update_manifest_url\": \"" + update_manifest_url_override + "\",\n";
+        }
         content += "  \"update_channel\": \"" + update_channel + "\",\n";
         content += "  \"installed_update_channel\": \"" + installed_update_channel + "\",\n";
         content += "  \"check_updates_on_startup\": " + std::string(check_updates_on_startup ? "true" : "false") + ",\n";

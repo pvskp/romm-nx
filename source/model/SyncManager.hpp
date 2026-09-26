@@ -8,14 +8,13 @@
 #include <condition_variable>
 #include <pthread.h>
 #include "DataModel.hpp"
-#include "FrontendTarget.hpp"
+#include "FrontendProfile.hpp"
 
 namespace romm::model {
 
     // The steps of a per-game sync, in execution order. Background only
-    // exists when the "cover as platform background" option is on. When the
-    // run targets both frontends, each stage exists once per target — the
-    // stage rows are keyed by (stage, target), not stage alone.
+    // exists when the "cover as platform background" option is on. The build
+    // serves exactly one frontend, so every stage exists once.
     enum class SyncStage { Rom, Saves, States, Cover, Background };
 
     enum class SyncStageState {
@@ -30,7 +29,6 @@ namespace romm::model {
 
     struct SyncStageResult {
         SyncStage stage = SyncStage::Rom;
-        SyncTarget target = SyncTarget::Tico;
         SyncStageState state = SyncStageState::Pending;
         std::string message; // readable detail (path, save name, error...)
     };
@@ -48,7 +46,7 @@ namespace romm::model {
         std::string server_info;  // file_name + updated_at of the server save
         std::string server_updated_at;
         int server_save_id = 0;
-        std::string target_rel_path; // relative to the Tico saves folder
+        std::string target_rel_path; // local file name of the save under sync
     };
 
     // Thread-safe copy of everything the sync UI needs to draw itself.
@@ -70,7 +68,7 @@ namespace romm::model {
 
     // One game to process inside a platform-wide sync. Carries its own
     // platform slug: a batch can span several platforms (marked games from
-    // different collections), and each game must resolve its Tico folders
+    // different collections), and each game must resolve its frontend folders
     // from the platform it actually belongs to.
     struct SyncGameEntry {
         int rom_id = 0;
@@ -83,11 +81,6 @@ namespace romm::model {
     // transfers in the requested direction. force_save_upload and
     // force_save_download are mutually exclusive (the UI is a radio).
     struct SyncOptions {
-        // Which frontend(s) this run writes to. Targets run in order (Tico
-        // first), each with a fresh server fetch — so the second target
-        // always decides against the server state the first one left behind,
-        // which is what keeps both frontends consistent after an "Ambos" run.
-        SyncDestination destination = SyncDestination::Tico;
         bool force_rom = false;          // re-download the ROM even if present
         bool force_save_upload = false;  // push the local save unconditionally
         bool force_save_download = false; // pull the server save unconditionally
@@ -117,13 +110,13 @@ namespace romm::model {
 
     // One game's record inside sync_state.json. The fingerprint pairs the
     // server's updated_at with a hash of the local file, so conflicts are
-    // detected without ever trusting the console's clock. One record exists
-    // PER TARGET (a game synced to both frontends has two independent
-    // anchors — different local files, different folders, same server).
+    // detected without ever trusting the console's clock. Each build owns its
+    // own sync_state.json (one frontend per app), so records are never shared
+    // between the Tico and RetroArch apps.
     struct SyncStateEntry {
         int rom_id = 0;
-        std::string platform;               // tico folder slug
-        std::string rom_path;               // tico ROM path on the SD
+        std::string platform;               // this frontend's folder slug
+        std::string rom_path;               // ROM path on the SD
         long long rom_size = 0;
         std::string save_local_fingerprint; // "<size>-<shorthash>"
         int server_save_id = 0;             // 0 = nothing uploaded/known yet
@@ -153,16 +146,14 @@ namespace romm::model {
         // Downloads one specific server save version straight to the game's
         // save target (Save Data screen). Runs on the sync worker so the
         // progress modal shows it; stages show a single SAVES row. The pull
-        // lands in whichever frontend the Save Data screen currently shows.
+        // lands in this build's frontend.
         void StartSpecificSaveDownload(int rom_id, const std::string& platform_slug,
-                                       const std::string& title, const SaveEntry& save,
-                                       SyncTarget target = SyncTarget::Tico);
+                                       const std::string& title, const SaveEntry& save);
 
         // Downloads one specific server state to its local slot file (State
         // Data screen), like the save variant above.
         void StartSpecificStateDownload(int rom_id, const std::string& platform_slug,
-                                        const std::string& title, const SaveEntry& state,
-                                        SyncTarget target = SyncTarget::Tico);
+                                        const std::string& title, const SaveEntry& state);
 
         SyncSnapshot GetSnapshot() const;
         bool IsRunning() const;
@@ -182,9 +173,10 @@ namespace romm::model {
         static std::string CalcFingerprint(const std::string& path);
 
         // The name a save is stored under on the RomM server: the local
-        // file's base name with its Tico extension (".sav", N64 ".fla")
-        // rewritten to the standard ".srm" battery-save extension the server's
-        // emulator integration reads.
+        // file's base name with this frontend's extension (Tico ".sav", N64
+        // ".fla"; RetroArch already uses .srm natively) rewritten to the
+        // standard ".srm" battery-save extension the server's emulator
+        // integration reads.
         static std::string ServerSaveName(const std::string& local_path);
 
         // Parses "<base>.stateN" (or any name containing ".stateN") into the
@@ -217,17 +209,15 @@ namespace romm::model {
         static bool IsCompressedArchive(const std::string& filename);
 
         // --- sync_state.json persistence --------------------------------
-        // Entries are keyed by (target, rom_id). The file format tags every
-        // entry with a "target" token; entries written before that field
-        // existed load as Tico (the only target there was).
-        static constexpr const char* kSyncStatePath = "sdmc:/switch/romm-nx/sync_state.json";
+        // The file lives in this build's app folder; each frontend app keeps
+        // its own records.
         void LoadSyncState();
         void SaveSyncState();
 
-        // Copy of the recorded sync-state entries of one target, for the
-        // Save Data screen's local scan (it re-reads fingerprints and server
-        // anchors per game).
-        void GetSyncState(SyncTarget target, std::map<int, SyncStateEntry>& out) const;
+        // Copy of the recorded sync-state entries, for the Save/State Data
+        // screens' local scan (they re-read fingerprints and server anchors
+        // per game).
+        void GetSyncState(std::map<int, SyncStateEntry>& out) const;
 
         ~SyncManager();
 
@@ -241,57 +231,52 @@ namespace romm::model {
         void PlatformWorker(const std::string& platform_slug, const std::string& platform_name,
                             const std::vector<SyncGameEntry>& games, const SyncOptions& options);
         // Shared per-game pipeline (ROM -> saves -> cover), used by both the
-        // single-game and the platform-wide workers. Walks the destination's
-        // targets in order; each target runs the full pipeline against a
-        // fresh server fetch.
+        // single-game and the platform-wide workers.
         void RunGameSync(const GameDetail& detail, const std::string& platform_slug,
                          const std::string& title, const SyncOptions& options);
         // Rebuilds the stage list for the running game: one ROM and one
-        // Saves/States row per target, plus Cover/Background only when Tico
-        // is among the targets (they are Tico-specific features).
+        // Saves/States row, plus Cover/Background only on the Tico flavor
+        // (they are Tico-specific features).
         void ResetStages(const std::string& title, const SyncOptions& options);
         void Finish();
-        void SetStage(SyncStage stage, SyncTarget target, SyncStageState state,
+        void SetStage(SyncStage stage, SyncStageState state,
                       const std::string& message);
         void SetWarning(const std::string& warning);
-        int StageIndex(SyncStage stage, SyncTarget target) const;
+        int StageIndex(SyncStage stage) const;
 
         // Returns once the conflict prompt has been answered or the sync was
         // cancelled during the wait.
         ConflictAnswer WaitForConflictDecision();
         bool RunSaveDownload(const SaveEntry& save, const std::string& target_path,
-                             int rom_id, SyncTarget target, const std::string& target_slug,
+                             int rom_id, const std::string& target_slug,
                              const std::string& rom_path, long long rom_size);
-        bool RunSaveUpload(const std::string& target_path, int rom_id, SyncTarget target,
+        bool RunSaveUpload(const std::string& target_path, int rom_id,
                            const std::string& target_slug, const std::string& core,
                            const std::string& rom_path, long long rom_size);
-        // Full per-save decision flow for ONE target. `target_slug` is this
-        // target's resolved platform slug (drives folder + core + extension).
-        void RunSavesStage(int rom_id, SyncTarget target, const std::string& target_slug,
+        // Full per-save decision flow. `target_slug` is this frontend's
+        // resolved platform slug (drives folder + core + extension).
+        void RunSavesStage(int rom_id, const std::string& target_slug,
                            const std::string& save_target_path, const SyncOptions& options);
 
         static void* SyncTrampoline(void* arg);
         static void* PlatformSyncTrampoline(void* arg);
         static void* SpecificSaveTrampoline(void* arg);
         static void* SpecificStateTrampoline(void* arg);
-        // Specific save/state pulls from the Save/State Data screens run for
-        // the target those screens currently show.
+        // Specific save/state pulls from the Save/State Data screens always
+        // land in this build's frontend.
         void SpecificSaveWorker(int rom_id, const std::string& platform_slug,
-                                const std::string& title, const SaveEntry& save,
-                                SyncTarget target);
+                                const std::string& title, const SaveEntry& save);
         void SpecificStateWorker(int rom_id, const std::string& platform_slug,
-                                 const std::string& title, const SaveEntry& state,
-                                 SyncTarget target);
+                                 const std::string& title, const SaveEntry& state);
         bool RunStateDownload(const SaveEntry& state, const std::string& target_path,
-                              int rom_id, int slot, SyncTarget target,
+                              int rom_id, int slot,
                               const std::string& target_slug,
                               const std::string& rom_path, long long rom_size);
         bool RunStateUpload(const std::string& target_path, int rom_id, int slot,
-                            SyncTarget target, const std::string& target_slug,
-                            const std::string& core,
+                            const std::string& target_slug, const std::string& core,
                             const std::string& rom_path, long long rom_size);
-        // Full per-slot decision flow for ONE target (mirrors RunSavesStage).
-        void RunStatesStage(int rom_id, SyncTarget target, const std::string& target_slug,
+        // Full per-slot decision flow (mirrors RunSavesStage).
+        void RunStatesStage(int rom_id, const std::string& target_slug,
                             const std::string& state_dir, const std::string& rom_base,
                             const SyncOptions& options);
 
@@ -310,17 +295,9 @@ namespace romm::model {
         pthread_t worker_thread_ = 0;
         bool thread_started_ = false;
 
-        // Per-target sync-state records: one map per frontend, each keyed by
-        // rom_id. Index is static_cast<size_t>(target).
-        std::map<int, SyncStateEntry> sync_state_[2];
+        // The sync-state records of this build's frontend, keyed by rom_id.
+        std::map<int, SyncStateEntry> sync_state_;
         mutable std::mutex state_mutex_;
-
-        std::map<int, SyncStateEntry>& StateMap(SyncTarget target) {
-            return sync_state_[static_cast<size_t>(target)];
-        }
-        const std::map<int, SyncStateEntry>& StateMap(SyncTarget target) const {
-            return sync_state_[static_cast<size_t>(target)];
-        }
     };
 
 }

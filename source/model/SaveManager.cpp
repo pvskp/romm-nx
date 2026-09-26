@@ -1,6 +1,5 @@
 #include "SaveManager.hpp"
 #include "ConfigManager.hpp"
-#include "FrontendTarget.hpp"
 #include "RommApi.hpp"
 #include "ScreenWakeManager.hpp"
 #include <switch.h>
@@ -111,15 +110,12 @@ namespace romm::model {
                 size_t dot = rom_name.find_last_of('.');
                 std::string rom_base = (dot != std::string::npos) ? rom_name.substr(0, dot) : rom_name;
                 if (!rom_base.empty()) {
-                    // The save folder and extension come from the active
-                    // target's catalog; the target slug recorded by the sync
-                    // (or re-resolved here) drives the extension.
-                    const std::string dir = GetSaveDirFor(active_target_, g.platform_slug);
-                    const std::string tslug = ResolvePlatformSlugFor(
-                        active_target_, g.platform_slug);
+                    // The save folder and extension come from this build's
+                    // frontend profile (the entry recorded them under).
+                    const std::string dir = frontend::GetSavesDir(g.platform_slug);
                     if (!dir.empty()) {
                         const std::string save_path = dir + rom_base +
-                                                      ResolveSaveExtensionFor(active_target_, tslug);
+                                                      frontend::ResolveSaveExtension(g.platform_slug);
                         struct stat st;
                         if (stat(save_path.c_str(), &st) == 0 && st.st_size > 0) {
                             g.local_exists = true;
@@ -181,7 +177,6 @@ namespace romm::model {
                 g.rom_id = game.id;
                 g.title = game.title;
                 g.platform_slug = romm_slug;
-                g.target = active_target_;
                 snapshot_.games.push_back(g);
             }
             snapshot_.platform_slug = romm_slug;
@@ -193,7 +188,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(active_target_, state);
+        sync.GetSyncState(state);
         RebuildLocal(state);
 
         cancel_requested_ = false;
@@ -228,7 +223,7 @@ namespace romm::model {
         auto& sync = SyncManager::Instance();
         sync.LoadSyncState();
         std::map<int, SyncStateEntry> state;
-        sync.GetSyncState(active_target_, state);
+        sync.GetSyncState(state);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);

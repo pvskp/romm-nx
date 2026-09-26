@@ -1,6 +1,5 @@
 #include "ScreenWakeManager.hpp"
 #include "ConfigManager.hpp"
-#include "DownloadManager.hpp"
 #include <switch.h>
 #include <iostream>
 
@@ -17,7 +16,7 @@ namespace romm::model {
 
     void ScreenWakeManager::Poll() {
         if (pending_update.exchange(false)) {
-            bool desired = ConfigManager::Instance().ScreenAlwaysOn() || DownloadManager::Instance().HasActiveDownload();
+            bool desired = ConfigManager::Instance().ScreenAlwaysOn();
             if (desired != current_state) {
                 appletSetMediaPlaybackState(desired);
                 current_state = desired;

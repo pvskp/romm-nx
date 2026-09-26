@@ -5,7 +5,8 @@
 
 // Central mapping between the RomM world and the RetroArch frontend, the
 // exact counterpart of TicoCatalog. RetroArch organizes saves and states
-// per CORE (saves/<core>/<rom>.srm) instead of per platform, so the core
+// per CORE (cores/savefiles/<core>/<rom>.srm and
+// cores/savestates/<core>/) instead of per platform, so the core
 // table is what drives the folder layout — a wrong core strands saves in
 // a folder the emulator never reads.
 namespace romm::model {
@@ -17,7 +18,7 @@ namespace romm::model {
     std::string ResolveRetroArchPlatformSlug(const std::string& romm_slug);
 
     // Libretro core identifier for this platform — also the subfolder name
-    // under RetroArch's saves/ and states/ directories. Empty string means
+    // under RetroArch's per-core save/state directories. Empty string means
     // this platform has no usable core in v1 (no save/state support).
     std::string ResolveRetroArchCore(const std::string& ra_slug);
 

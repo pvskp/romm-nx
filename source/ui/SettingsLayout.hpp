@@ -144,11 +144,10 @@ namespace romm::ui {
         static size_t GetOptionsCount(size_t cat_idx);
         static size_t GetCategoriesCount();
 
-        // A on the ROM Paths base-directory row: opens the keyboard and
-        // persists the new base, where every system installs under
-        // <base>/roms/<system>/.
-        void EditBaseDirectory();
-        void EditTicoBaseDirectory();
+        // A on a Paths & Sync directory row: opens the keyboard and persists
+        // the new path, creating it on disk when missing.
+        void EditFrontendBaseDirectory();
+        void EditFrontendRomsDirectory();
 
         PU_SMART_CTOR(SettingsLayout)
     };

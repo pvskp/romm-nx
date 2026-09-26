@@ -21,8 +21,8 @@ namespace romm::model {
             return map;
         }
 
-        // Platform -> libretro core identifier. Doubles as the saves/<core>/
-        // and states/<core>/ subfolder name. Cores without an entry cannot
+        // Platform -> libretro core identifier. Doubles as the per-core
+        // subfolder name under cores/savefiles/ and cores/savestates/. Cores without an entry cannot
         // sync saves or states in v1 (their stage shows "not supported").
         // Names follow the upstream libretro core IDs, which is what
         // RetroArch uses for its per-core save folders on Switch.

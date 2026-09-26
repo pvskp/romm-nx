@@ -3,8 +3,8 @@
 **romm-nx** is an unofficial Nintendo Switch homebrew client for
 [RomM](https://github.com/rommapp/romm).
 
-It allows you to browse your RomM library and download games from your own RomM
-server directly to your Nintendo Switch.
+It allows you to browse your RomM library and sync games, saves and states
+from your own RomM server directly to your Nintendo Switch.
 
 > [!IMPORTANT] romm-nx is a personal project intended as a temporary solution
 > until a more official or robust alternative becomes available.
@@ -20,13 +20,17 @@ independently and diverges significantly from upstream.
 
 **What this fork adds or changes:**
 
-- **Tico sync integration** — push your RomM library into Tico's folders on the
-  SD card: ROMs, saves and covers, plus an optional per-game background.
+- **Sync to a frontend of your choice** — the app is built per frontend: a
+  **Tico** build pushes your RomM library into Tico's folders (ROMs, saves,
+  covers and an optional per-game background) and a **RetroArch** build syncs
+  ROMs, saves and save states into RetroArch's own folders. Each build is a
+  separate app with its own config, sync state and update channel, so both can
+  be installed side by side.
 - **Save Data screen** — local-first save management per game and per platform,
   with a verdict chip (IN SYNC / LOCAL ONLY / SERVER ONLY / LOCAL NEWER / SERVER
   NEWER / CONFLICT), a LOCAL → LAST SYNC → SERVER time strip, and SYNC / UPLOAD
   / DOWNLOAD actions.
-- **State Data screen** — manage Tico save states
+- **State Data screen** — manage save states
   (`<base>/states/<platform>/<game>.state1..9`) per game and per platform,
   mirroring the Save Data screen.
 - **Sync workflow** — pre-flight options modal, conflict resolution (keep local
@@ -37,9 +41,10 @@ independently and diverges significantly from upstream.
   sidebar and hints echo the selection.
 - **Detail view** — manual cover/screenshot switch (R-Stick), a single Details
   tab, and scroll-tip chevrons for long descriptions.
-- **Simplified UI** — removed the unused Installed / Queue / File Browser
-  screens and the platform-visibility system; the main menu is now Games / Save
-  Data / States / Settings; every platform the server reports is always listed.
+- **Simplified UI** — removed the classic in-app download queue, the
+  Installed / File Browser screens and the platform-visibility system; the main
+  menu is now Games / Save Data / States / Settings; every platform the server
+  reports is always listed.
 
 The features still planned upstream — cheats/mods management and an in-app game
 launcher — are **not** part of this fork.
@@ -48,13 +53,12 @@ launcher — are **not** part of this fork.
 
 - Connect to a self-hosted RomM server
 - Browse platforms and games, with cover art and details
-- Download games directly to the Nintendo Switch
-- Sync your library into Tico's folders (ROMs, saves, covers) via the sync
+- Sync your library into the built frontend's folders (Tico: ROMs, saves,
+  covers and backgrounds; RetroArch: ROMs, saves and states) via the sync
   workflow
 - Manage saves per game and per platform (Save Data screen)
-- Manage Tico save states per game and per platform (State Data screen)
+- Manage save states per game and per platform (State Data screen)
 - Mark games in the library and bulk-sync the selection
-- Configure download paths for supported platforms
 
 Some features are still experimental or incomplete.
 
@@ -65,15 +69,22 @@ Some features are still experimental or incomplete.
 
 ## Build from source
 
-`make -j$(nproc)`
+The frontend is chosen at build time; each flavor produces its own NRO.
+
+```bash
+make -j$(nproc)            # Tico build:  romm-nx-tico.nro
+make FRONTEND=retroarch -j$(nproc)   # RetroArch build: romm-nx-retroarch.nro
+# or: make retroarch
+```
 
 ## Installation
 
-1. Download the latest `romm-nx.nro` release.
-2. Copy it to:
+1. Download the `.nro` of the frontend you use (or both, to manage both).
+2. Copy each one to its own folder:
 
 ```text
-sdmc:/switch/romm-nx/romm-nx.nro
+sdmc:/switch/romm-nx-tico/romm-nx-tico.nro        (Tico build)
+sdmc:/switch/romm-nx-retroarch/romm-nx-retroarch.nro   (RetroArch build)
 ```
 
 3. Launch romm-nx from the Homebrew Menu.
@@ -83,11 +94,13 @@ Optionally, after launching the application for the first time, a configuration
 file will be created at:
 
 ```text
-sdmc:/switch/romm-nx/config.json
+sdmc:/switch/romm-nx-tico/config.json        (Tico build)
+sdmc:/switch/romm-nx-retroarch/config.json   (RetroArch build)
 ```
 
-You can paste your RomM user API key into this file instead of entering it
-manually using the Nintendo Switch keyboard.
+Each build keeps its own configuration and sync-state records. If you upgrade
+from an older combined build, the first sync adopts the records that belonged
+to this frontend from the old `sdmc:/switch/romm-nx/sync_state.json`.
 
 A self-hosted RomM server is required.
 

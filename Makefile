@@ -10,26 +10,47 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
 #---------------------------------------------------------------------------------
+# Frontend flavor: which frontend this build serves. Each flavor is a separate
+# app (own NRO, install folder, config and sync state) so Tico and RetroArch
+# builds can coexist on the same SD card.
+#   make              -> tico flavor (romm-nx-tico.nro)
+#   make FRONTEND=retroarch (or `make retroarch`) -> romm-nx-retroarch.nro
+#---------------------------------------------------------------------------------
+FRONTEND	?=	tico
+ifeq ($(FRONTEND),tico)
+	TARGET	:=	romm-nx-tico
+else ifeq ($(FRONTEND),retroarch)
+	TARGET	:=	romm-nx-retroarch
+else
+$(error "FRONTEND must be 'tico' or 'retroarch' (got '$(FRONTEND)')")
+endif
+
+#---------------------------------------------------------------------------------
 # TARGET is the name of the output
 # BUILD is the directory where object files & intermediate files will be placed
 # SOURCES is a list of directories containing source code
 # DATA is a list of directories containing data files
 # INCLUDES is a list of directories containing header files
 #---------------------------------------------------------------------------------
-TARGET		:=	romm-nx
-BUILD		:=	build
+BUILD		:=	build-$(FRONTEND)
 SOURCES		:=	source source/ui source/model source/navigation source/i18n
 DATA		:=	data
 INCLUDES	:=	include temp_plutonium/Plutonium/include
 ROMFS		:=	romfs
 
-APP_TITLE	:=	Romm-NX
 APP_AUTHOR	:=	pvskp
 # Single source of truth: source/Version.hpp
 # Extract version string and code at build time so NRO nacp metadata stays in sync.
 APP_VERSION	:=	$(shell grep 'ROMM_NX_VERSION ' $(TOPDIR)/source/Version.hpp | grep -o '[0-9][0-9.]*')
 APP_VERSION_CODE := $(shell grep 'ROMM_NX_VERSION_CODE' $(TOPDIR)/source/Version.hpp | grep -o '[0-9][0-9]*')
-DEFINES		:=	-DAPP_VERSION_STR=\"$(APP_VERSION)\" -DAPP_VERSION_CODE=$(APP_VERSION_CODE)
+
+# The app title shown in the Homebrew Menu carries the flavor and the exact
+# version it was built from, so the two NROs (and their update channel) are
+# distinguishable at a glance.
+APP_TITLE	:=	Romm-NX ($(if $(filter retroarch,$(FRONTEND)),RetroArch,Tico)) v$(APP_VERSION)
+
+DEFINES		:=	-DAPP_VERSION_STR=\"$(APP_VERSION)\" -DAPP_VERSION_CODE=$(APP_VERSION_CODE) \
+			-DROMM_FRONTEND_$(shell echo $(FRONTEND) | tr a-z A-Z)
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -70,8 +91,13 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
+# Each flavor compiles only its own frontend profile + catalog translation
+# units; the other flavor's files are excluded so no dual-frontend code or
+# catalog table ever ships in the build.
+EXCLUDED_CPP := $(if $(filter tico,$(FRONTEND)),FrontendRetroArch.cpp RetroArchCatalog.cpp,FrontendTico.cpp TicoCatalog.cpp)
+
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
-CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
+CPPFILES	:=	$(filter-out $(EXCLUDED_CPP),$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp))))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
@@ -139,19 +165,33 @@ ifneq ($(ROMFS),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all tico retroarch clean-tico clean-retroarch
 
 #---------------------------------------------------------------------------------
+# The default flavor is tico; the convenience targets build (or clean) one
+# specific flavor regardless of the FRONTEND variable.
+#---------------------------------------------------------------------------------
 all: $(BUILD)
+
+tico:
+	@$(MAKE) --no-print-directory FRONTEND=tico
+
+retroarch:
+	@$(MAKE) --no-print-directory FRONTEND=retroarch
+
+clean-tico:
+	@rm -fr build-tico romm-nx-tico.nro romm-nx-tico.nacp romm-nx-tico.elf
+
+clean-retroarch:
+	@rm -fr build-retroarch romm-nx-retroarch.nro romm-nx-retroarch.nacp romm-nx-retroarch.elf
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 #---------------------------------------------------------------------------------
-clean:
+clean: clean-tico clean-retroarch
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
 
 #---------------------------------------------------------------------------------
 else

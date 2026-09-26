@@ -37,12 +37,6 @@ namespace romm::ui {
         // (the user pressed A), so browsing the list costs no requests at all.
         int detail_prefetch_rom_id = 0;
 
-        // Bulk download queue. EnqueueDownload needs a GameDetail (multi-disc
-        // games resolve their on-disk identity from detail.files), and the ROM
-        // list doesn't carry one — so each entry may need a detail fetch first.
-        // Worked through one at a time via the existing single-slot detail
-        // request rather than firing N fetches at once, which would flood the
-        // High lane exactly the way the cover backlog used to flood the queue.
         void PollNetworkRequests();
         void PollDeferredNetworkStart();
         void PollDetailPrefetch();

@@ -34,3 +34,7 @@ NUL
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Per-frontend flavor builds
+build-tico/
+build-retroarch/

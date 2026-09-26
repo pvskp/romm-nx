@@ -72,8 +72,6 @@ namespace romm::ui {
         pu::sdl2::Texture panel_meta_tex  = nullptr;
         pu::sdl2::Texture panel_desc_tex  = nullptr;
         pu::sdl2::Texture panel_keys_tex  = nullptr; // focused-panel key legend
-        pu::sdl2::Texture panel_action_tex = nullptr;
-        std::string panel_action_str;
         size_t panel_cached_game_idx = 999999;
         uint64_t panel_cached_generation = 0;
         romm::model::DetailLoadState panel_cached_detail_state = romm::model::DetailLoadState::NotLoaded;

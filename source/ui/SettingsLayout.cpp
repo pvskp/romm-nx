@@ -2,7 +2,6 @@
 #include "../model/ConfigManager.hpp"
 #include "../model/RomPathManager.hpp"
 #include "../model/CacheManager.hpp"
-#include "../model/DownloadManager.hpp"
 #include "../model/ScreenWakeManager.hpp"
 #include "../Version.hpp"
 #include "../model/UpdateManager.hpp"
@@ -10,7 +9,6 @@
 #include "../navigation/HttpClient.hpp"
 #include "LibraryLayout.hpp"
 #include "MainApplication.hpp"
-#include "GlobalProgressBar.hpp"
 #include "../model/AudioManager.hpp"
 #include "../model/DataModel.hpp"
 #include "../i18n/I18n.hpp"
@@ -443,8 +441,6 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.general.language"),
                                LanguageSettingLabel(config.GetLanguage())});
             options.push_back({romm::i18n::tr("settings.general.show_build_version"), on_off(config.ShowBuildVersion())});
-            options.push_back({romm::i18n::tr("settings.general.confirm_uninstall"), on_off(config.ConfirmBeforeUninstall())});
-            options.push_back({romm::i18n::tr("settings.general.show_installed_badge"), on_off(config.ShowInstalledBadge())});
             options.push_back({romm::i18n::tr("settings.general.screen_always_on"), on_off(config.ScreenAlwaysOn())});
             options.push_back({romm::i18n::tr("settings.general.covers_quality"),
                                TranslateCoversQuality(config.GetCoversQualityString())});
@@ -497,24 +493,17 @@ namespace romm::ui {
             options.push_back({romm::i18n::tr("settings.connection.test"), connection_test_status, true});
         }
         else if (active_cat == 3) { // Paths & Sync
-            // One menu for everything that lives on the SD: where syncs land
-            // (destination + per-frontend folders) and where plain downloads
-            // go. Values are config values shown as-is.
-            romm::model::SyncDestination def;
-            romm::model::ParseDestination(config.GetSyncDefaultDestination(), def);
-            std::string dest_label = romm::model::DestinationName(def);
-            if (def == romm::model::SyncDestination::Both) {
-                dest_label = romm::i18n::tr("sync.destination.both");
+            // One menu for everything that lives on the SD, scoped to this
+            // build's frontend folders. Values are config values shown as-is.
+            const std::string frontend = romm::model::frontend::Name();
+            options.push_back({romm::i18n::format("settings.paths.frontend_base_dir",
+                                                  {{"frontend", frontend}}),
+                               truncatePath(config.GetFrontendBaseDir()), true});
+            if (romm::model::frontend::kHasRomsDirSetting) {
+                options.push_back({romm::i18n::format("settings.paths.frontend_roms_dir",
+                                                      {{"frontend", frontend}}),
+                                   truncatePath(config.GetFrontendRomsDir()), true});
             }
-            options.push_back({romm::i18n::tr("settings.paths.default_destination"), dest_label});
-            options.push_back({romm::i18n::tr("settings.paths.tico_base_dir"),
-                               truncatePath(config.GetTicoBaseDir()), true});
-            options.push_back({romm::i18n::tr("settings.paths.retroarch_base_dir"),
-                               truncatePath(config.GetRetroArchBaseDir()), true});
-            options.push_back({romm::i18n::tr("settings.paths.reuse_tico_roms"),
-                               on_off(config.RetroarchReusesTicoRoms())});
-            options.push_back({romm::i18n::tr("settings.paths.downloads_base_dir"),
-                               truncatePath(config.GetRomsBaseDir()), true});
         }
         else if (active_cat == 4) { // Advanced
             std::string cover_sz = romm::i18n::tr("settings.advanced.calculating");
@@ -583,20 +572,8 @@ namespace romm::ui {
                                UpdateChannelDisplayName(config.GetUpdateChannel())});
             options.push_back({romm::i18n::tr("settings.debug.installed_channel"),
                                UpdateChannelDisplayName(config.GetInstalledUpdateChannel())});
-            options.push_back({romm::i18n::tr("settings.debug.config_path"), truncatePath("sdmc:/switch/romm-nx/config.json")});
-            options.push_back({romm::i18n::tr("settings.debug.index_entries"), std::to_string(romm::model::DownloadManager::Instance().GetInstalledIndex().size())});
-
-            // Populating active download title
-            std::string active_title = romm::i18n::tr("common.none");
-            auto active_task = romm::model::DownloadManager::Instance().GetActiveDownloadSnapshot();
-            if (active_task.rom_id > 0 && (active_task.state == romm::model::DownloadState::DownloadingGame || active_task.state == romm::model::DownloadState::DownloadingCover || active_task.state == romm::model::DownloadState::SyncingCover || active_task.state == romm::model::DownloadState::Preparing)) {
-                active_title = active_task.title;
-                if (active_title.size() > 22) {
-                    active_title = active_title.substr(0, 19) + "...";
-                }
-            }
-            options.push_back({romm::i18n::tr("settings.debug.active_download"), active_title});
-            options.push_back({romm::i18n::tr("settings.debug.queue_count"), std::to_string(romm::model::DownloadManager::Instance().GetQueueSnapshot().size())});
+            options.push_back({romm::i18n::tr("settings.debug.config_path"),
+                               truncatePath(std::string(romm::model::frontend::AppDir()) + "/config.json")});
             options.push_back({romm::i18n::tr("settings.debug.export"), romm::i18n::tr("settings.debug.trigger_export"), true});
         }
 
@@ -863,9 +840,6 @@ namespace romm::ui {
         confirm_modal = SettingsConfirmModal::New();
         this->Add(confirm_modal);
 
-        auto global_progress = romm::ui::GlobalProgressBar::New(850, 15, 400, 60, nav);
-        this->Add(global_progress);
-
         std::cout << "[SETTINGS] Opened" << std::endl;
     }
 
@@ -919,16 +893,10 @@ namespace romm::ui {
                 config.SetShowBuildVersion(!config.ShowBuildVersion());
                 config.Save();
             } else if (opt_idx == 2) {
-                config.SetConfirmBeforeUninstall(!config.ConfirmBeforeUninstall());
-                config.Save();
-            } else if (opt_idx == 3) {
-                config.SetShowInstalledBadge(!config.ShowInstalledBadge());
-                config.Save();
-            } else if (opt_idx == 4) {
                 config.SetScreenAlwaysOn(!config.ScreenAlwaysOn());
                 config.Save();
                 romm::model::ScreenWakeManager::Instance().RequestUpdate();
-            } else if (opt_idx == 5) {
+            } else if (opt_idx == 3) {
                 auto current = config.GetCoversQuality();
                 if (current == romm::model::CoversQuality::Balanced) {
                     config.SetCoversQuality(romm::model::CoversQuality::HD);
@@ -938,10 +906,10 @@ namespace romm::ui {
                     config.SetCoversQuality(romm::model::CoversQuality::Balanced);
                 }
                 config.Save();
-            } else if (opt_idx == 6) {
+            } else if (opt_idx == 4) {
                 config.SetFileBrowserWriteAnywhere(!config.FileBrowserWriteAnywhere());
                 config.Save();
-            } else if (opt_idx == 7) {
+            } else if (opt_idx == 5) {
                 // Global default only — platforms with their own Y-Menu
                 // override are unaffected.
                 auto current = config.GetGridViewMode();
@@ -1027,33 +995,12 @@ namespace romm::ui {
             }
         }
         else if (cat_idx == 3) { // Paths & Sync
+            // Row 0 is this build's frontend base dir; the RetroArch flavor
+            // adds its ROMs-folder row.
             if (opt_idx == 0) {
-                // Default destination: Tico -> RetroArch -> Both -> Tico.
-                romm::model::SyncDestination dest;
-                romm::model::ParseDestination(config.GetSyncDefaultDestination(), dest);
-                dest = static_cast<romm::model::SyncDestination>(
-                    (static_cast<size_t>(dest) + 1) % 3);
-                config.SetSyncDefaultDestination(romm::model::DestinationId(dest));
-                config.Save();
-            } else if (opt_idx == 1) {
-                EditTicoBaseDirectory();
-            } else if (opt_idx == 2) {
-                std::string current = config.GetRetroArchBaseDir();
-                std::string val = romm::navigation::NavigationManager::ShowKeyboard(
-                    romm::i18n::tr("keyboard.retroarch_dir.header"),
-                    romm::i18n::format("keyboard.retroarch_dir.subtext", {{"path", current}}),
-                    current);
-                if (!val.empty() && val != current) {
-                    if (romm::model::RomPathManager::ValidatePath(val)) {
-                        config.SetRetroArchBaseDir(val);
-                        config.Save();
-                    }
-                }
-            } else if (opt_idx == 3) {
-                config.SetRetroarchReusesTicoRoms(!config.RetroarchReusesTicoRoms());
-                config.Save();
-            } else if (opt_idx == 4) {
-                EditBaseDirectory();
+                EditFrontendBaseDirectory();
+            } else if (romm::model::frontend::kHasRomsDirSetting && opt_idx == 1) {
+                EditFrontendRomsDirectory();
             }
         }
         else if (cat_idx == 4) { // Advanced
@@ -1192,10 +1139,10 @@ namespace romm::ui {
             }
         }
         else if (cat_idx == 6) { // Debug
-            // Rows 0-6 are read-only diagnostics (build, both update channels,
-            // config path, index count, active download, queue); Export is last.
-            if (opt_idx == 7) {
-                std::string debug_path = "sdmc:/switch/romm-nx/debug.txt";
+            // Rows 0-3 are read-only diagnostics (build, both update channels,
+            // config path); Export is last.
+            if (opt_idx == 4) {
+                std::string debug_path = std::string(romm::model::frontend::AppDir()) + "/debug.txt";
                 FILE* f = fopen(debug_path.c_str(), "w");
                 if (f) {
                     fprintf(f, "Build Version: v%s (code %d)\n", romm::ROMM_NX_VERSION.c_str(), romm::ROMM_NX_VERSION_CODE);
@@ -1203,15 +1150,9 @@ namespace romm::ui {
                     fprintf(f, "Update Channel (installed): %s\n", config.GetInstalledUpdateChannel().c_str());
                     fprintf(f, "Update Manifest URL: %s\n", config.GetUpdateManifestUrl().c_str());
                     fprintf(f, "RomM Host: %s\n", config.GetRommHost().c_str());
-                    fprintf(f, "Config Path: sdmc:/switch/romm-nx/config.json\n");
-                    fprintf(f, "Installed Index Path: sdmc:/switch/romm-nx/installed_index.json\n");
-                    fprintf(f, "Installed Index Count: %zu\n", romm::model::DownloadManager::Instance().GetInstalledIndex().size());
-                    fprintf(f, "PlayStation ROM Path: %s\n", config.GetRomPath("psx").c_str());
-                    fprintf(f, "PlayStation 2 ROM Path: %s\n", config.GetRomPath("ps2").c_str());
-                    fprintf(f, "PSP ROM Path: %s\n", config.GetRomPath("psp").c_str());
-                    fprintf(f, "Nintendo DS ROM Path: %s\n", config.GetRomPath("nds").c_str());
-                    fprintf(f, "Download Queue Count: %zu\n", romm::model::DownloadManager::Instance().GetQueueSnapshot().size());
-                    
+                    fprintf(f, "Frontend: %s\n", romm::model::frontend::Name());
+                    fprintf(f, "Config Path: %s\n", (std::string(romm::model::frontend::AppDir()) + "/config.json").c_str());
+
                     auto stats = romm::model::CacheManager::Instance().CalculateSize();
                     fprintf(f, "Cache Total Size: %lld bytes\n", stats.total_size);
                     fprintf(f, "Cache Cover Size: %lld bytes\n", stats.cover_size);
@@ -1267,10 +1208,10 @@ namespace romm::ui {
     // here in the same change.
     size_t SettingsLayout::GetOptionsCount(size_t cat_idx) {
         switch (cat_idx) {
-            case 0: return 8; // General
+            case 0: return 6; // General
             case 1: return 7; // Theme
             case 2: return 3; // Connection
-            case 3: return 5; // Paths & Sync (destination, Tico, RA, reuse ROMs, downloads)
+            case 3: return romm::model::frontend::kHasRomsDirSetting ? 2 : 1; // Paths & Sync (frontend base [+ ROMs dir])
             case 4: return 7; // Advanced
             case 5: { // Updates
                 size_t count = 3; // Channel, Check on startup, Check for updates
@@ -1283,7 +1224,7 @@ namespace romm::ui {
                 }
                 return count;
             }
-            case 6: return 8; // Debug (build, 2 channels, config path, index, active dl, queue, export)
+            case 6: return 5; // Debug (build, 2 channels, config path, export)
             default: return 0;
         }
     }
@@ -1292,44 +1233,44 @@ namespace romm::ui {
         return kSettingsCategoryKeys.size();
     }
 
-    void SettingsLayout::EditBaseDirectory() {
+    void SettingsLayout::EditFrontendBaseDirectory() {
         auto& config = romm::model::ConfigManager::Instance();
 
-        std::string current = config.GetRomsBaseDir();
-        std::string example = current + "roms/nes/";
+        std::string current = config.GetFrontendBaseDir();
         std::string val = romm::navigation::NavigationManager::ShowKeyboard(
-            romm::i18n::tr("keyboard.base_dir.header"),
-            romm::i18n::format("keyboard.base_dir.subtext", {{"path", example}}),
+            romm::i18n::format("keyboard.frontend_dir.header",
+                               {{"frontend", romm::model::frontend::Name()}}),
+            romm::i18n::format("keyboard.frontend_dir.subtext", {{"path", current}}),
             current);
         if (!val.empty() && val != current) {
             if (romm::model::RomPathManager::ValidatePath(val)) {
-                // Normalize trailing slash, persist, and create the base on disk.
-                config.SetRomsBaseDir(val);
-                romm::model::RomPathManager::CreateFolderIfMissing(config.GetRomsBaseDir());
+                config.SetFrontendBaseDir(val);
+                romm::model::RomPathManager::CreateFolderIfMissing(config.GetFrontendBaseDir());
                 config.Save();
-                std::cout << "[ROM_PATH] base dir=" << config.GetRomsBaseDir() << std::endl;
+                std::cout << "[SYNC] frontend base dir=" << config.GetFrontendBaseDir() << std::endl;
             } else {
-                std::cout << "[ROM_PATH] Invalid base dir: " << val << std::endl;
+                std::cout << "[SYNC] Invalid frontend base dir: " << val << std::endl;
             }
         }
     }
 
-    void SettingsLayout::EditTicoBaseDirectory() {
+    void SettingsLayout::EditFrontendRomsDirectory() {
         auto& config = romm::model::ConfigManager::Instance();
 
-        std::string current = config.GetTicoBaseDir();
+        std::string current = config.GetFrontendRomsDir();
         std::string val = romm::navigation::NavigationManager::ShowKeyboard(
-            romm::i18n::tr("keyboard.tico_dir.header"),
-            romm::i18n::format("keyboard.tico_dir.subtext", {{"path", current}}),
+            romm::i18n::format("keyboard.frontend_roms_dir.header",
+                               {{"frontend", romm::model::frontend::Name()}}),
+            romm::i18n::format("keyboard.frontend_roms_dir.subtext", {{"path", current}}),
             current);
         if (!val.empty() && val != current) {
             if (romm::model::RomPathManager::ValidatePath(val)) {
-                config.SetTicoBaseDir(val);
-                romm::model::RomPathManager::CreateFolderIfMissing(config.GetTicoBaseDir());
+                config.SetFrontendRomsDir(val);
+                romm::model::RomPathManager::CreateFolderIfMissing(config.GetFrontendRomsDir());
                 config.Save();
-                std::cout << "[SYNC] tico base dir=" << config.GetTicoBaseDir() << std::endl;
+                std::cout << "[SYNC] frontend ROMs dir=" << config.GetFrontendRomsDir() << std::endl;
             } else {
-                std::cout << "[SYNC] Invalid tico base dir: " << val << std::endl;
+                std::cout << "[SYNC] Invalid frontend ROMs dir: " << val << std::endl;
             }
         }
     }
