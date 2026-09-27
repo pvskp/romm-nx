@@ -10,6 +10,7 @@
 #include "../ui/InstalledLayout.hpp"
 #include "../ui/QueueLayout.hpp"
 #include "../ui/FileBrowserLayout.hpp"
+#include "../ui/SavesLayout.hpp"
 #include "../ui/LibraryMenuModal.hpp"
 #include "../ui/AlphabetBar.hpp"
 #include "../ui/MainApplication.hpp"
@@ -152,6 +153,26 @@ namespace romm::navigation {
         UpdateLayoutSelection();
     }
 
+    void NavigationManager::PollDetailSaves() {
+        // Only meaningful while the Save Data tab is the active one; this is
+        // also what kicks off the fetch on first visit, so restricting it to
+        // tab_idx==1 keeps a browser-on-Details from firing an unneeded request.
+        if (current_screen == Screen::Detail && detail_layout && selected_detail_tab_idx == 1) {
+            detail_layout->UpdateSaveDataPanel();
+        }
+    }
+
+    void NavigationManager::PollSaves() {
+        if (current_screen == Screen::Saves && saves_layout) {
+            saves_layout->OnSelectionUpdated();
+        }
+    }
+
+    void NavigationManager::TriggerRomsLoad(int platform_id) {
+        auto main_app = static_cast<romm::ui::MainApplication*>(app);
+        main_app->TriggerFetchRoms(platform_id);
+    }
+
     void NavigationManager::UpdateLayoutSelection() {
         if (current_screen == Screen::MainMenu && main_menu_layout) {
             main_menu_layout->OnSelectionUpdated();
@@ -168,6 +189,8 @@ namespace romm::navigation {
             queue_layout->OnSelectionUpdated();
         } else if (current_screen == Screen::FileBrowser && file_browser_layout) {
             file_browser_layout->OnSelectionUpdated();
+        } else if (current_screen == Screen::Saves && saves_layout) {
+            saves_layout->OnSelectionUpdated();
         }
     }
 
@@ -188,6 +211,7 @@ namespace romm::navigation {
         if (queue_layout) queue_layout->RefreshTranslations();
         // Created lazily on first visit, so it may legitimately not exist yet.
         if (file_browser_layout) file_browser_layout->RefreshTranslations();
+        if (saves_layout) saves_layout->RefreshTranslations();
         // FullscreenImageLayout renders its status line from tr() every frame.
 
         UpdateLayoutSelection();
@@ -525,6 +549,15 @@ namespace romm::navigation {
                     if (queue_layout) queue_layout->ForceRefresh();
                     app->LoadLayout(queue_layout);
                     std::cout << "[NAV] Opening Queue layout" << std::endl;
+                } else if (selected_menu_idx == 3) { // Saves
+                    current_screen = Screen::Saves;
+                    state_changed = true;
+                    if (!saves_layout) {
+                        saves_layout = std::make_shared<romm::ui::SavesLayout>(shared_from_this());
+                    }
+                    if (saves_layout) saves_layout->ForceRefresh();
+                    app->LoadLayout(saves_layout);
+                    std::cout << "[NAV] Opening Saves layout" << std::endl;
                 } else if (selected_menu_idx == 5) { // Settings
                     current_screen = Screen::Settings;
                     selected_settings_category_idx = 0;
@@ -985,11 +1018,18 @@ namespace romm::navigation {
                     }
                 }
                 else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
-                    detail_focus = DetailFocus::Actions;
-                    selected_detail_action_idx = 0;
+                    // Down on the Save Data tab drops into its save list rather
+                    // than the shared ROM-download action button.
+                    if (selected_detail_tab_idx == 1) {
+                        detail_focus = DetailFocus::SaveList;
+                    } else {
+                        detail_focus = DetailFocus::Actions;
+                        selected_detail_action_idx = 0;
+                    }
                     state_changed = true;
                     if (detail_layout) detail_layout->UpdateFooterHints();
-                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> Download Button" << std::endl;
+                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Tabs -> "
+                              << (detail_focus == DetailFocus::SaveList ? "Save List" : "Download Button") << std::endl;
                 }
             }
             else if (detail_focus == DetailFocus::Cover) {
@@ -1077,6 +1117,33 @@ namespace romm::navigation {
                         } else {
                             std::cerr << "[NAV] Detail not loaded yet." << std::endl;
                         }
+                    }
+                }
+            }
+            else if (detail_focus == DetailFocus::SaveList) {
+                // Only reachable while the Save Data tab (tab_idx == 1) is
+                // active. Up/Down move the save selection; A downloads it.
+                if ((keys_effective & HidNpadButton_Up) || (keys_effective & HidNpadButton_StickLUp)) {
+                    if (detail_layout) detail_layout->SelectSave(-1);
+                    state_changed = true;
+                    std::cout << "[NAV] [SAVE LIST] Up" << std::endl;
+                }
+                else if ((keys_effective & HidNpadButton_Down) || (keys_effective & HidNpadButton_StickLDown)) {
+                    if (detail_layout) detail_layout->SelectSave(1);
+                    state_changed = true;
+                    std::cout << "[NAV] [SAVE LIST] Down" << std::endl;
+                }
+                else if ((keys_effective & HidNpadButton_Left) || (keys_effective & HidNpadButton_StickLLeft) ||
+                         (keys_effective & HidNpadButton_Right) || (keys_effective & HidNpadButton_StickLRight)) {
+                    detail_focus = DetailFocus::Tabs;
+                    state_changed = true;
+                    if (detail_layout) detail_layout->UpdateFooterHints();
+                    std::cout << "[NAV] [FOCUS REGION CHANGE] Focus: Save List -> Tabs" << std::endl;
+                }
+                else if (keys_down & HidNpadButton_A) {
+                    if (detail_layout) {
+                        detail_layout->DownloadSelectedSave();
+                        std::cout << "[NAV] [A PRESS] Download selected save" << std::endl;
                     }
                 }
             }
@@ -1244,6 +1311,19 @@ namespace romm::navigation {
         else if (current_screen == Screen::FileBrowser) {
             if (file_browser_layout) {
                 file_browser_layout->HandleInput(keys_down, 0, keys_held, pu::ui::TouchPoint());
+            }
+        }
+        else if (current_screen == Screen::Saves) {
+            if (saves_layout) {
+                if ((keys_down & HidNpadButton_B) && saves_layout->AtRoot()) {
+                    if (saves_layout) saves_layout->OnLeave();
+                    current_screen = Screen::MainMenu;
+                    state_changed = true;
+                    app->LoadLayout(main_menu_layout);
+                    std::cout << "[NAV] [B PRESS] B pressed in Saves root: returning to Main Menu" << std::endl;
+                } else {
+                    saves_layout->HandleInput(keys_effective, 0, keys_held, pu::ui::TouchPoint());
+                }
             }
         }
 

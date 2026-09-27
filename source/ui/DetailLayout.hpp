@@ -2,8 +2,12 @@
 
 #include <pu/Plutonium>
 #include <memory>
+#include <vector>
 #include "CoverProfile.hpp"
 #include "CoverCache.hpp"
+#include "../model/DataModel.hpp"
+#include "../model/RommApi.hpp"
+#include "../model/DownloadManager.hpp"
 
 namespace romm::navigation {
     class NavigationManager;
@@ -215,7 +219,30 @@ namespace romm::ui {
         int maxDescriptionScrollOffset = 0;
         std::vector<std::string> descriptionLines;
 
+        // --- Save Data tab (tab_idx == 1) state ---------------------------
+        // The game's saves are fetched once per rom_id on first visit to the
+        // tab, then cached here. `save_status` holds a transient downloading /
+        // saved / failed message for the current selection.
+        std::vector<romm::model::SaveEntry> saves;
+        int selected_save_idx = 0;
+        int saves_rom_id = -1;
+        bool saves_loading = false;
+        bool saves_loaded = false;
+        bool saves_failed = false;
+        std::shared_ptr<romm::model::SaveFetchResult> save_fetch;
+        std::shared_ptr<romm::model::DownloadManager::SaveDownloadResult> save_dl;
+        std::string save_status;
+        std::string last_save_name;
+        // Last string pushed to desc_text for the Save Data tab, so the
+        // per-frame poll only re-rasterises when the content actually changed.
+        std::string last_save_render;
+
     public:
+        // Advances the async save fetch/download and re-renders the Save Data
+        // tab content if it changed. Called every frame from the app's render
+        // callback (async results land on other threads, so we poll for them)
+        // and on tab entry.
+        void UpdateSaveDataPanel();
         DetailGameContext ctx;
         void SetContext(const DetailGameContext& context);
         void OnLeave();
@@ -228,6 +255,13 @@ namespace romm::ui {
         void UpdateDownloadStatus();
         void UpdateFooterHints();
         std::shared_ptr<DetailCard> GetCard() { return card; }
+
+        // Save Data tab control (driven by NavigationManager's SaveList region).
+        void SelectSave(int delta);
+        void DownloadSelectedSave();
+        void ResetSavePanel();
+        const std::vector<romm::model::SaveEntry>& GetSaves() const { return saves; }
+        int GetSelectedSaveIdx() const { return selected_save_idx; }
 
         PU_SMART_CTOR(DetailLayout)
     };

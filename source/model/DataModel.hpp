@@ -126,6 +126,20 @@ namespace romm::model {
         long long file_size_bytes = 0;
     };
 
+    // One save belonging to a ROM, as returned by GET /api/saves. Only the
+    // fields used to list and download saves are kept.
+    struct SaveEntry {
+        int id = 0;
+        int rom_id = 0;
+        std::string file_name;          // server-side file name, used on disk
+        long long file_size_bytes = 0;
+        std::string emulator;           // nullable on the server
+        std::string slot;               // nullable on the server
+        bool missing_from_fs = false;
+        std::string created_at;
+        std::string updated_at;
+    };
+
     struct GameDetail {
         int rom_id = 0;
         std::string description;

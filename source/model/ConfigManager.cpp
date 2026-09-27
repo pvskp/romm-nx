@@ -196,6 +196,10 @@ namespace romm::model {
         return roms_base_dir + "roms/" + NormalizePlatformSlug(platform) + "/";
     }
 
+    std::string ConfigManager::GetSavePath(const std::string& platform) const {
+        return roms_base_dir + "saves/" + NormalizePlatformSlug(platform) + "/";
+    }
+
     bool ConfigManager::Load() {
         std::string path = "sdmc:/switch/romm-nx/config.json";
         FILE* f = fopen(path.c_str(), "r");

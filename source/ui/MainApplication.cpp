@@ -87,6 +87,8 @@ namespace romm::ui {
             this->PollNetworkRequests();
             this->PollDetailPrefetch();
             this->PollBulkDownload();
+            nav_mgr->PollDetailSaves();
+            nav_mgr->PollSaves();
             romm::model::ScreenWakeManager::Instance().Poll();
             romm::model::AudioManager::Instance().Poll();
             nav_mgr->PollUpdateNotification();

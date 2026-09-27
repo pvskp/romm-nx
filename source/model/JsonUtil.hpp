@@ -6,6 +6,10 @@
 
 namespace romm::model {
 
+    // Defined in DataModel.hpp; forward-declared here so JsonUtil can parse
+    // saves without pulling the whole model in.
+    struct SaveEntry;
+
     struct PlatformEntry {
         int id = 0;
         std::string name;
@@ -24,6 +28,8 @@ namespace romm::model {
 
     bool jsonParsePlatformList(const std::string& json, std::vector<PlatformEntry>& out);
     bool jsonParseRomItems(const std::string& json, std::vector<RomEntry>& out);
+    // Parses GET /api/saves — a top-level JSON array of save objects.
+    bool jsonParseSaveItems(const std::string& json, std::vector<SaveEntry>& out);
     bool jsonExtractString(const std::string& json, const std::string& key, std::string& out);
     bool jsonExtractInt(const std::string& json, const std::string& key, int& out);
     bool jsonExtractLongLong(const std::string& json, const std::string& key, long long& out);

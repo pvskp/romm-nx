@@ -10,6 +10,7 @@
 #include "../model/ConfigManager.hpp"
 #include "../i18n/I18n.hpp"
 #include <sys/stat.h>
+#include <cstdio>
 #include "GlobalProgressBar.hpp"
 
 namespace romm::ui {
@@ -357,6 +358,7 @@ namespace romm::ui {
 
     void DetailLayout::OnLeave() {
         ctx.generation = 0;
+        ResetSavePanel();
         if (card) card->OnLeave();
     }
 
@@ -1076,6 +1078,13 @@ namespace romm::ui {
         platform_text->SetText("");
 
         size_t tab_idx = nav->GetSelectedDetailTabIdx();
+
+        // The Save Data panel shares desc_text with the other tabs and guards
+        // re-rendering with last_save_render; leaving the tab lets another tab
+        // overwrite that texture, so clear the cache to force a re-render on
+        // the way back in.
+        if (tab_idx != 1) last_save_render.clear();
+
         int rom_id = ctx.rom_id;
         romm::model::DetailLoadState state = model->GetDetailState(rom_id);
         const auto* detail = model->GetCachedDetail(rom_id);
@@ -1165,9 +1174,8 @@ namespace romm::ui {
         else if (tab_idx == 1) { // SAVE DATA
             meta_text->SetText("");
             desc_title_text->SetText(romm::i18n::tr("detail.section.save_data"));
-            desc_text->SetText(romm::i18n::tr("detail.coming_later"));
             trailer_title_text->SetText("");
-            UpdateFooterHints();
+            UpdateSaveDataPanel();
         }
         else if (tab_idx == 2) { // MODS
             meta_text->SetText("");
@@ -1225,6 +1233,141 @@ namespace romm::ui {
         desc_text->SetText(visible_desc);
     }
 
+    // File-local size formatting for the Save Data list rows.
+    static std::string SaveSizeStr(long long bytes) {
+        if (bytes <= 0) return "";
+        if (bytes >= 1024LL * 1024LL * 1024LL) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.1f GB", (double)bytes / (1024.0 * 1024.0 * 1024.0));
+            return buf;
+        }
+        if (bytes >= 1024LL * 1024LL) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+            return buf;
+        }
+        if (bytes >= 1024LL) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.1f KB", (double)bytes / 1024.0);
+            return buf;
+        }
+        return std::to_string(bytes) + " B";
+    }
+
+    void DetailLayout::UpdateSaveDataPanel() {
+        // Start the fetch the first time this tab is opened for this game. The
+        // rom_id guard means navigating to a different game (or re-entering the
+        // screen) triggers a fresh load and clears the stale list/status.
+        if (!saves_loading && !saves_loaded && !saves_failed && saves_rom_id != ctx.rom_id) {
+            saves_rom_id = ctx.rom_id;
+            saves_loading = true;
+            saves.clear();
+            selected_save_idx = 0;
+            save_status.clear();
+            last_save_name.clear();
+            save_dl.reset();
+            save_fetch = romm::model::RommApi::fetchSavesAsync(ctx.rom_id);
+        }
+
+        if (saves_loading && save_fetch && save_fetch->completed) {
+            saves_loading = false;
+            if (save_fetch->success) {
+                saves = save_fetch->saves;
+                saves_loaded = true;
+                if (selected_save_idx >= (int)saves.size()) selected_save_idx = 0;
+            } else {
+                saves_failed = true;
+            }
+        }
+
+        // Poll an in-flight download so the transient status settles.
+        if (save_dl && save_dl->completed) {
+            if (save_dl->success) {
+                save_status = romm::i18n::format("detail.saves.saved", {{"path", last_save_name}});
+            } else if (!save_dl->error.empty()) {
+                save_status = save_dl->error;
+            } else {
+                save_status = romm::i18n::tr("detail.saves.failed");
+            }
+            save_dl.reset();
+        }
+
+        std::string content;
+        if (saves_loading) {
+            content = romm::i18n::tr("detail.saves.loading");
+        } else if (saves_failed) {
+            content = romm::i18n::tr("detail.saves.load_failed");
+        } else if (saves.empty()) {
+            content = romm::i18n::tr("detail.saves.empty");
+        } else {
+            std::string dir = romm::model::ConfigManager::Instance().GetSavePath(ctx.platform_slug);
+            auto& dl_mgr = romm::model::DownloadManager::Instance();
+            for (size_t i = 0; i < saves.size(); ++i) {
+                const auto& s = saves[i];
+                bool on_this = ((int)i == selected_save_idx);
+                bool present = false;
+                if (!s.file_name.empty()) {
+                    struct stat b;
+                    std::string p = dir + dl_mgr.SanitizeFilename(s.file_name);
+                    present = (stat(p.c_str(), &b) == 0 && b.st_size > 0);
+                }
+                std::string line;
+                if (present) line = on_this ? "> [saved] " : "  [saved] ";
+                else         line = on_this ? "> " : "  ";
+                line += s.file_name;
+                std::string meta;
+                if (s.file_size_bytes > 0) meta += "  (" + SaveSizeStr(s.file_size_bytes) + ")";
+                if (!s.emulator.empty())  meta += "  " + s.emulator;
+                if (!s.slot.empty())      meta += "  slot " + s.slot;
+                line += meta;
+                content += line + "\n";
+            }
+            if (!save_status.empty()) content += "\n" + save_status;
+        }
+        // Dirty-guard: this is polled every frame, so only re-rasterise the
+        // texture when the rendered content actually changed.
+        if (content != last_save_render) {
+            last_save_render = content;
+            desc_text->SetText(content);
+            UpdateFooterHints();
+        }
+    }
+
+    void DetailLayout::SelectSave(int delta) {
+        if (saves.empty()) return;
+        int n = (int)saves.size();
+        selected_save_idx += delta;
+        if (selected_save_idx < 0) selected_save_idx = 0;
+        if (selected_save_idx >= n) selected_save_idx = n - 1;
+        // Re-rendered on the next OnSelectionUpdated pass.
+    }
+
+    void DetailLayout::DownloadSelectedSave() {
+        if (saves.empty()) return;
+        if ((size_t)selected_save_idx >= saves.size()) return;
+        // One active download at a time.
+        if (save_dl && !save_dl->completed) return;
+
+        const auto& s = saves[selected_save_idx];
+        auto& dl_mgr = romm::model::DownloadManager::Instance();
+        last_save_name = dl_mgr.SanitizeFilename(s.file_name);
+        save_dl = dl_mgr.DownloadSave(s, ctx.platform_slug);
+        save_status = romm::i18n::tr("detail.saves.downloading");
+    }
+
+    void DetailLayout::ResetSavePanel() {
+        saves_rom_id = -1;
+        saves_loading = false;
+        saves_loaded = false;
+        saves_failed = false;
+        saves.clear();
+        selected_save_idx = 0;
+        save_fetch.reset();
+        save_dl.reset();
+        save_status.clear();
+        last_save_name.clear();
+    }
+
     void DetailLayout::UpdateFooterHints() {
         if (!hint_text) return;
 
@@ -1244,7 +1387,9 @@ namespace romm::ui {
         // prefixes/suffixes glued on: which segments appear, and in what order,
         // is a property of the sentence and belongs to the translator.
         const char* key = "hint.detail.cover";
-        if (focus != romm::navigation::DetailFocus::Cover) {
+        if (focus == romm::navigation::DetailFocus::SaveList) {
+            key = "hint.detail.save_list";
+        } else if (focus != romm::navigation::DetailFocus::Cover) {
             const bool scrollable = (maxDescriptionScrollOffset > 0);
             key = (has_image && scrollable) ? "hint.detail.panel_image_scroll"
                 : (has_image)               ? "hint.detail.panel_image"

@@ -163,6 +163,23 @@ namespace romm::model {
         void ReconcileInstalledIndex();
         std::map<std::string, InstalledIndexEntry> GetInstalledIndex() const;
 
+        // Result of downloading one save. The worker sets `completed` when the
+        // transfer (and optional rename) is done; `success` reflects whether the
+        // file landed. Consumed by the Save Data tab to drop the transient
+        // status line.
+        struct SaveDownloadResult {
+            bool completed = false;
+            bool success = false;
+            std::string error;
+        };
+
+        // Downloads one save's bytes from RomM to <base>/saves/<system>/<file>.
+        // Runs on its own async worker lane (saves are small and user-blocking,
+        // so it deliberately stays out of the ROM queue/worker). Skips the
+        // transfer when the target already exists and is non-empty. The returned
+        // result lets the UI report completion; it is never null.
+        std::shared_ptr<SaveDownloadResult> DownloadSave(const SaveEntry& save, const std::string& platform_slug);
+
         ~DownloadManager();
 
     private:

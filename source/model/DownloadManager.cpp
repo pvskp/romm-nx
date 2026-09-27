@@ -1223,6 +1223,119 @@ namespace romm::model {
 
 
 
+    std::shared_ptr<DownloadManager::SaveDownloadResult> DownloadManager::DownloadSave(
+            const SaveEntry& save, const std::string& platform_slug) {
+        auto result = std::make_shared<SaveDownloadResult>();
+
+        auto& config = ConfigManager::Instance();
+        if (!config.IsValid()) {
+            std::cerr << "[Save] Download blocked: Configuration is invalid" << std::endl;
+            result->completed = true;
+            result->error = romm::i18n::tr("save.error.config");
+            return result;
+        }
+
+        std::string slug = NormalizePlatformSlug(platform_slug);
+        std::string save_dir = config.GetSavePath(slug);
+        RomPathManager::CreateFolderIfMissing(save_dir);
+
+        std::string safe_name = SanitizeFilename(save.file_name);
+        if (safe_name.empty()) {
+            result->completed = true;
+            result->error = romm::i18n::tr("save.error.filename");
+            return result;
+        }
+
+        std::string final_path = save_dir + safe_name;
+        if (!IsInsideAllowedRoot(final_path, save_dir)) {
+            result->completed = true;
+            result->error = romm::i18n::tr("save.error.path");
+            return result;
+        }
+
+        // Refuse to clobber an existing, non-empty save with the same name.
+        struct stat existing;
+        if (stat(final_path.c_str(), &existing) == 0 && existing.st_size > 0) {
+            std::cout << "[Save] Already present, skipping: " << final_path << std::endl;
+            result->completed = true;
+            result->success = true;
+            return result;
+        }
+
+        std::string part_path = final_path + ".part";
+        DeleteLogicalFile(part_path);
+
+        std::string url = config.GetRommHost() + "/api/saves/" + std::to_string(save.id) + "/content";
+        std::string auth = "Authorization: Bearer " + config.GetApiKey();
+
+        std::cout << "[Save] Downloading rom_id=" << save.rom_id << " save_id=" << save.id
+                  << " -> " << final_path << std::endl;
+
+        HttpClient::runAsync([result, url, final_path, part_path, auth]() {
+            CURL* curl = curl_easy_init();
+            if (!curl) {
+                std::cerr << "[Save] curl init failed" << std::endl;
+                result->completed = true;
+                result->error = romm::i18n::tr("download.error.curl_init");
+                return;
+            }
+
+            FILE* f = fopen(part_path.c_str(), "wb");
+            if (!f) {
+                std::cerr << "[Save] Could not open part file: " << part_path << std::endl;
+                result->completed = true;
+                result->error = romm::i18n::tr("download.error.part_file");
+                curl_easy_cleanup(curl);
+                return;
+            }
+
+            struct curl_slist* headers = NULL;
+            headers = curl_slist_append(headers, auth.c_str());
+
+            DownloadWriter writer;
+            writer.is_big_file = false;
+            writer.file_ptr = f;
+
+            curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &writer);
+            curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+            CURLcode res = curl_easy_perform(curl);
+            fclose(f);
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+
+            if (res != CURLE_OK) {
+                std::cerr << "[Save] Download failed: " << curl_easy_strerror(res) << std::endl;
+                result->error = curl_easy_strerror(res);
+            } else {
+                struct stat cb;
+                if (stat(part_path.c_str(), &cb) == 0 && cb.st_size > 0) {
+                    if (rename(part_path.c_str(), final_path.c_str()) == 0) {
+                        std::cout << "[Save] Saved to " << final_path << std::endl;
+                        result->success = true;
+                    } else {
+                        std::cerr << "[Save] Rename failed: " << final_path << std::endl;
+                        result->error = romm::i18n::tr("save.error.write");
+                        DeleteLogicalFile(part_path);
+                    }
+                } else {
+                    std::cerr << "[Save] Empty or incomplete download" << std::endl;
+                    result->error = romm::i18n::tr("download.error.verification");
+                    DeleteLogicalFile(part_path);
+                }
+            }
+            result->completed = true;
+        }, HttpPriority::High);
+
+        return result;
+    }
+
     // Modern libcurl requires progress callback to be matching this signature
     static int xferinfo(void *p, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
         DownloadManager* mgr = static_cast<DownloadManager*>(p);

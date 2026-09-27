@@ -16,6 +16,7 @@ namespace romm::ui {
     class QueueLayout;
     class FileBrowserLayout;
     class FullscreenImageLayout;
+    class SavesLayout;
 }
 
 namespace romm::navigation {
@@ -28,7 +29,8 @@ namespace romm::navigation {
         Installed,
         Queue,
         FileBrowser,
-        FullscreenImage
+        FullscreenImage,
+        Saves
     };
 
     enum class LibraryFocus {
@@ -43,7 +45,10 @@ namespace romm::navigation {
     enum class DetailFocus {
         Tabs,
         Actions,
-        Cover
+        Cover,
+        // Only reachable while the Save Data tab (tab_idx == 1) is active;
+        // Up/Down move the save selection, A downloads the selected save.
+        SaveList
     };
 
     enum class CoverSize {
@@ -132,6 +137,7 @@ namespace romm::navigation {
         std::shared_ptr<romm::ui::QueueLayout> queue_layout;
         std::shared_ptr<romm::ui::FileBrowserLayout> file_browser_layout;
         std::shared_ptr<romm::ui::FullscreenImageLayout> fullscreen_image_layout;
+        std::shared_ptr<romm::ui::SavesLayout> saves_layout;
 
         void UpdateLayoutSelection();
 
@@ -176,6 +182,19 @@ namespace romm::navigation {
         DetailFocus GetDetailFocus() const { return detail_focus; }
         size_t GetSelectedDetailTabIdx() const { return selected_detail_tab_idx; }
         size_t GetSelectedDetailActionIdx() const { return selected_detail_action_idx; }
+
+        // Advances the Save Data tab's async fetch/download and re-renders if
+        // needed. Called every frame from the app render callback so the save
+        // list/status settle without needing input.
+        void PollDetailSaves();
+
+        // Same per-frame poll for the Saves screen's async work.
+        void PollSaves();
+
+        // Ensures the given platform's ROM list is in the model (fetches it via
+        // the main app when missing) so the Saves screen can map rom_id to a
+        // game title.
+        void TriggerRomsLoad(int platform_id);
         
         // Settings accessors
         bool ShowAlphabetFilter() const;
@@ -205,6 +224,7 @@ namespace romm::navigation {
         std::shared_ptr<romm::ui::QueueLayout> GetQueueLayout() const { return queue_layout; }
         std::shared_ptr<romm::ui::FileBrowserLayout> GetFileBrowserLayout() { return file_browser_layout; }
         std::shared_ptr<romm::ui::FullscreenImageLayout> GetFullscreenImageLayout() { return fullscreen_image_layout; }
+        std::shared_ptr<romm::ui::SavesLayout> GetSavesLayout() { return saves_layout; }
         std::shared_ptr<romm::model::DataModel> GetModel() { return model; }
         pu::ui::Application* GetApp() { return app; }
 

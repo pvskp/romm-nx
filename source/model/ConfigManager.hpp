@@ -177,6 +177,9 @@ namespace romm::model {
         const std::string& GetRomsBaseDir() const { return roms_base_dir; }
         void SetRomsBaseDir(const std::string& dir);
         std::string GetRomPath(const std::string& platform) const;
+        // Downloaded save files land in <base>/saves/<system>/, mirroring the
+        // ROM layout above.
+        std::string GetSavePath(const std::string& platform) const;
 
         // --- Platform visibility (Settings > Platforms) -------------------
         // Purely a UI filter over the platform browser: nothing here touches

@@ -34,11 +34,20 @@ namespace romm::model {
         GameDetail detail;
     };
 
+    struct SaveFetchResult {
+        bool completed = false;
+        bool success = false;
+        long statusCode = 0;
+        int rom_id = 0;
+        std::vector<SaveEntry> saves;
+    };
+
     class RommApi {
     public:
         static std::shared_ptr<PlatformFetchResult> fetchPlatformsAsync();
         static std::shared_ptr<RomFetchResult> fetchRomsAsync(int platformId, int requestId);
         static std::shared_ptr<RomDetailFetchResult> fetchRomDetailAsync(int romId, uint64_t generation = 0, const std::string& platform_slug = "");
+        static std::shared_ptr<SaveFetchResult> fetchSavesAsync(int romId);
     };
 
 }
