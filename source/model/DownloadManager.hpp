@@ -142,6 +142,16 @@ namespace romm::model {
         bool IsGameInstalled(const std::string& platform_slug, const std::string& filename);
         void UninstallGame(const std::string& platform_slug, const std::string& filename, const std::string& cover_path);
 
+        // Moves an installed game's on-disk footprint (single file, or a
+        // multi-disc subfolder + .m3u set) into dest_dir and rebases the
+        // installed-index entry so it keeps pointing at the moved file. Covers
+        // live in the cover cache and are intentionally left alone.
+        // Returns 0 = ok, 1 = failed to move, 2 = a same-named file already
+        // exists in the destination.
+        int MoveInstalledGame(const std::string& platform_slug,
+                              const std::string& filename,
+                              const std::string& dest_dir);
+
         // The filename whose on-disk presence represents this ROM being installed.
         // For a multi-disc PS1 set that's the root ".m3u"; otherwise the first file.
         // Used by the detail view (install badge) and uninstall so both agree with

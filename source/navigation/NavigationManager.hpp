@@ -204,6 +204,14 @@ namespace romm::navigation {
         std::shared_ptr<romm::ui::InstalledLayout> GetInstalledLayout() const { return installed_layout; }
         std::shared_ptr<romm::ui::QueueLayout> GetQueueLayout() const { return queue_layout; }
         std::shared_ptr<romm::ui::FileBrowserLayout> GetFileBrowserLayout() { return file_browser_layout; }
+        // Opens the standalone file browser (from the Main Menu).
+        void OpenFileBrowser();
+        // Opens the file browser pre-configured to move the given installed game
+        // to a folder the user picks. Returns to the Installed screen on
+        // completion or cancel.
+        void OpenMoveBrowser(const std::string& platform_slug,
+                             const std::string& filename,
+                             const std::string& title);
         std::shared_ptr<romm::ui::FullscreenImageLayout> GetFullscreenImageLayout() { return fullscreen_image_layout; }
         std::shared_ptr<romm::model::DataModel> GetModel() { return model; }
         pu::ui::Application* GetApp() { return app; }

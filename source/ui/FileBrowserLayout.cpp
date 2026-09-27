@@ -1,6 +1,8 @@
 #include "FileBrowserLayout.hpp"
+#include "InstalledLayout.hpp"
 #include "../navigation/NavigationManager.hpp"
 #include "../model/ConfigManager.hpp"
+#include "../model/DownloadManager.hpp"
 #include "../i18n/I18n.hpp"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -303,8 +305,12 @@ namespace romm::ui {
         }
 
         uint32_t active_gen = scan_generation_id;
+        // In move mode the destination is a folder, so the listing hides files
+        // and only surfaces directories. Captured up front: move_mode is set
+        // before the scan starts and never changes mid-scan.
+        const bool folders_only = move_mode;
 
-        scan_thread = std::thread([this, path, active_gen]() {
+        scan_thread = std::thread([this, path, active_gen, folders_only]() {
             auto start_time = std::chrono::high_resolution_clock::now();
 
             DIR* dir = opendir(path.c_str());
@@ -364,6 +370,7 @@ namespace romm::ui {
                         entry.item_count = -1;
                     }
                 }
+                if (folders_only && !entry.is_dir) continue;
                 entries.push_back(entry);
             }
             closedir(dir);
@@ -614,6 +621,14 @@ namespace romm::ui {
             options_menu_ids.push_back(id);
             options_menu_items.push_back(label);
         };
+
+        // Move-mode restricts the menu to the single action that matters:
+        // confirming the currently displayed folder as the destination.
+        if (move_mode) {
+            add_option(FileOption::MoveHere, romm::i18n::tr("filebrowser.option.move_here"));
+            if (selected_option_idx >= options_menu_items.size()) selected_option_idx = 0;
+            return;
+        }
 
         add_option(FileOption::Mount, romm::i18n::tr("filebrowser.option.mount"));
         add_option(FileOption::Open, romm::i18n::tr("filebrowser.option.open"));
@@ -879,6 +894,52 @@ namespace romm::ui {
         BuildLocationsList();
         LoadDirectoryAsync(current_path);
         OnSelectionUpdated();
+    }
+
+    void FileBrowserPane::StartMove(const std::string& platform_slug,
+                                    const std::string& filename,
+                                    const std::string& title) {
+        CancelPendingScan();
+        move_mode = true;
+        move_slug = platform_slug;
+        move_filename = filename;
+        move_title = title;
+
+        // Start at the SD root so any folder on the card is reachable to browse
+        // to, mirroring the standalone browser's default landing spot.
+        current_path = "sdmc:/";
+        selected_file_idx = 0;
+        file_scroll_offset = 0;
+        target_select_name.clear();
+        marked_paths.clear();
+        confirm_is_bulk = false;
+        active_focus = FileBrowserFocus::Files;
+        LoadDirectoryAsync(current_path);
+        OnSelectionUpdated();
+    }
+
+    void FileBrowserPane::SetStandaloneMode() {
+        move_mode = false;
+        move_slug.clear();
+        move_filename.clear();
+        move_title.clear();
+        marked_paths.clear();
+        confirm_is_bulk = false;
+    }
+
+    void FileBrowserPane::ReturnFromMove() {
+        auto nav = nav_mgr.lock();
+        if (!nav) return;
+        move_mode = false;
+        move_slug.clear();
+        move_filename.clear();
+        move_title.clear();
+        if (auto inst = nav->GetInstalledLayout()) {
+            inst->ForceRefresh();
+        }
+        nav->SetCurrentScreen(romm::navigation::Screen::Installed);
+        nav->GetApp()->LoadLayout(nav->GetInstalledLayout());
+        std::cout << "[NAV] Move picker -> Installed" << std::endl;
     }
 
     void FileBrowserPane::OnRender(pu::ui::render::Renderer::Ref &drawer, const s32 x_coord, const s32 y_coord) {
@@ -1203,6 +1264,10 @@ namespace romm::ui {
         } else if (active_focus == FileBrowserFocus::DeleteConfirm) {
             btns = { {"B", romm::i18n::tr("filebrowser.footer.cancel")},
                      {"A", romm::i18n::tr("filebrowser.footer.confirm")} };
+        } else if (move_mode) {
+            btns = { {"Y", romm::i18n::tr("filebrowser.footer.move_here")},
+                     {"B", romm::i18n::tr("filebrowser.footer.back")},
+                     {"A", romm::i18n::tr("filebrowser.footer.open")} };
         } else {
             btns = { {"Y", romm::i18n::tr("filebrowser.footer.options")},
                      {"X", romm::i18n::tr("filebrowser.footer.mark")},
@@ -1336,10 +1401,15 @@ namespace romm::ui {
                     file_scroll_offset = 0;
                     OnSelectionUpdated();
                 } else {
-                    // Return to Main Menu
-                    nav->SetCurrentScreen(romm::navigation::Screen::MainMenu);
-                    nav->GetApp()->LoadLayout(nav->GetMainMenuLayout());
-                    std::cout << "[NAV] Returning to Main Menu" << std::endl;
+                    if (move_mode) {
+                        // Cancelling the move picker returns to the Installed screen.
+                        ReturnFromMove();
+                    } else {
+                        // Return to Main Menu
+                        nav->SetCurrentScreen(romm::navigation::Screen::MainMenu);
+                        nav->GetApp()->LoadLayout(nav->GetMainMenuLayout());
+                        std::cout << "[NAV] Returning to Main Menu" << std::endl;
+                    }
                 }
             }
             if (keys_down & HidNpadButton_Y) {
@@ -1351,7 +1421,9 @@ namespace romm::ui {
                 OnSelectionUpdated();
             }
             if (keys_down & HidNpadButton_X) {
-                if (has_sel) {
+                // Marking is irrelevant in move mode — only harmless folders are
+                // listed, so skip to avoid implying batch semantics.
+                if (!move_mode && has_sel) {
                     ToggleMark(sel_item);
                     OnSelectionUpdated();
                 }
@@ -1392,6 +1464,24 @@ namespace romm::ui {
                     selected_file_idx = 0;
                     file_scroll_offset = 0;
                     OnSelectionUpdated();
+                }
+                else if (option == FileOption::MoveHere) {
+                    if (move_filename.empty()) return;
+                    int rc = romm::model::DownloadManager::Instance()
+                                 .MoveInstalledGame(move_slug, move_filename, current_path);
+                    if (rc == 0) {
+                        std::cout << "[MOVE] rom moved to " << current_path << std::endl;
+                        ReturnFromMove();
+                    } else {
+                        std::cout << "[MOVE] failed rc=" << rc << std::endl;
+                        nav->ShowKeyboard(romm::i18n::tr("common.error"),
+                                          rc == 2 ? romm::i18n::tr("filebrowser.move.exists")
+                                                  : romm::i18n::tr("filebrowser.move.error"),
+                                          "");
+                        // Stay in move mode so the user can pick another folder.
+                        active_focus = FileBrowserFocus::Files;
+                        OnSelectionUpdated();
+                    }
                 }
                 else if (option == FileOption::Open) {
                     active_focus = FileBrowserFocus::Files;
@@ -1669,6 +1759,20 @@ namespace romm::ui {
 
     void FileBrowserLayout::ForceRefresh() {
         if (pane) pane->ForceRefresh();
+    }
+
+    void FileBrowserLayout::StartMove(const std::string& platform_slug,
+                                      const std::string& filename,
+                                      const std::string& title) {
+        if (header_text) {
+            header_text->SetText(romm::i18n::format("filebrowser.move.title", {{"title", title}}));
+        }
+        if (pane) pane->StartMove(platform_slug, filename, title);
+    }
+
+    void FileBrowserLayout::SetStandaloneMode() {
+        if (header_text) header_text->SetText(romm::i18n::tr("filebrowser.title"));
+        if (pane) pane->SetStandaloneMode();
     }
 
     void FileBrowserLayout::RefreshTranslations() {

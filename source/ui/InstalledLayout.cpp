@@ -886,6 +886,21 @@ namespace romm::ui {
             return;
         }
 
+        // Y moves the selected installed ROM to a folder of the user's choosing.
+        if (keys_down & HidNpadButton_Y) {
+            const auto* entry = list_panel->GetSelected();
+            if (entry) {
+                auto nav = nav_mgr.lock();
+                if (nav) {
+                    std::string filename = entry->original_filename.empty()
+                                               ? entry->title : entry->original_filename;
+                    std::string title = entry->title.empty() ? filename : entry->title;
+                    nav->OpenMoveBrowser(entry->platform_slug, filename, title);
+                }
+            }
+            return;
+        }
+
         bool uninstall_triggered = list_panel->HandleInput(keys_down);
         if (uninstall_triggered) {
             const auto* entry = list_panel->GetSelected();

@@ -537,14 +537,8 @@ namespace romm::navigation {
                     app->LoadLayout(settings_layout);
                     std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> Settings Screen" << std::endl;
                 } else if (selected_menu_idx == 4) { // File browser
-                    current_screen = Screen::FileBrowser;
                     state_changed = true;
-                    if (!file_browser_layout) {
-                        file_browser_layout = std::make_shared<romm::ui::FileBrowserLayout>(shared_from_this());
-                    }
-                    if (file_browser_layout) file_browser_layout->ForceRefresh();
-                    app->LoadLayout(file_browser_layout);
-                    std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: Main Menu -> File Browser Screen" << std::endl;
+                    OpenFileBrowser();
                 } else {
                     std::cout << "[LOG] Not implemented yet" << std::endl;
                 }
@@ -1257,6 +1251,30 @@ namespace romm::navigation {
         if (state_changed) {
             UpdateLayoutSelection();
         }
+    }
+
+    void NavigationManager::OpenFileBrowser() {
+        if (!file_browser_layout) {
+            file_browser_layout = std::make_shared<romm::ui::FileBrowserLayout>(shared_from_this());
+        }
+        file_browser_layout->SetStandaloneMode();
+        current_screen = Screen::FileBrowser;
+        file_browser_layout->ForceRefresh();
+        app->LoadLayout(file_browser_layout);
+        std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: -> File Browser (standalone)" << std::endl;
+    }
+
+    void NavigationManager::OpenMoveBrowser(const std::string& platform_slug,
+                                            const std::string& filename,
+                                            const std::string& title) {
+        if (!file_browser_layout) {
+            file_browser_layout = std::make_shared<romm::ui::FileBrowserLayout>(shared_from_this());
+        }
+        file_browser_layout->StartMove(platform_slug, filename, title);
+        current_screen = Screen::FileBrowser;
+        file_browser_layout->ForceRefresh();
+        app->LoadLayout(file_browser_layout);
+        std::cout << "[NAV] [LAYOUT TRANSITION] Screen transition: -> File Browser (move picker)" << std::endl;
     }
 
     bool NavigationManager::ShowAlphabetFilter() const {

@@ -102,6 +102,16 @@ namespace romm::ui {
         std::string current_scan_path = "";
         uint32_t scan_generation_id = 0;
 
+        // "Move this ROM" picker mode. When enabled the listing is restricted to
+        // folders, the options menu offers a single "Move here" action, and the
+        // pane returns to the Installed screen on completion/cancel.
+        bool move_mode = false;
+        std::string move_slug;
+        std::string move_filename;
+        std::string move_title;
+
+        void ReturnFromMove();
+
         // Data containers
         std::vector<LocationEntry> locations;
         std::vector<FileEntry> loaded_items;
@@ -114,7 +124,7 @@ namespace romm::ui {
         // the label, which changes with the UI language.
         enum class FileOption {
             Mount, Open, Properties, Refresh,
-            CreateFolder, Rename, Delete, DeleteMarked
+            CreateFolder, Rename, Delete, DeleteMarked, MoveHere
         };
         std::vector<FileOption> options_menu_ids;
         std::vector<std::string> options_menu_items;
@@ -213,6 +223,11 @@ namespace romm::ui {
         void RefreshTranslations();
         void ForceRefresh();
         void CancelPendingScan();
+        // Enters "move this ROM" picker mode targeting the given game.
+        void StartMove(const std::string& platform_slug, const std::string& filename,
+                       const std::string& title);
+        // Restores the standalone file-browser mode (list files, main-menu return).
+        void SetStandaloneMode();
 
         std::string GetCurrentPath() const { return current_path; }
         FileBrowserFocus GetActiveFocus() const { return active_focus; }
@@ -245,6 +260,9 @@ namespace romm::ui {
         void RefreshTranslations();
         void ForceRefresh();
         void CancelPendingScan();
+        void StartMove(const std::string& platform_slug, const std::string& filename,
+                       const std::string& title);
+        void SetStandaloneMode();
         void HandleInput(const u64 keys_down, const u64 keys_up, const u64 keys_held, const pu::ui::TouchPoint touch_pos);
 
         PU_SMART_CTOR(FileBrowserLayout)

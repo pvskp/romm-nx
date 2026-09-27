@@ -802,6 +802,102 @@ namespace romm::model {
         ReconcileInstalledIndex();
     }
 
+    int DownloadManager::MoveInstalledGame(const std::string& platform_slug,
+                                           const std::string& filename,
+                                           const std::string& dest_dir) {
+        std::string resolved_slug = NormalizePlatformSlug(platform_slug);
+        std::string safe_name = SanitizeFilename(filename);
+
+        std::string dest = dest_dir;
+        if (dest.empty() || dest.back() != '/') dest += "/";
+
+        // Assemble the exact on-disk footprint the same way UninstallGame does,
+        // so a move relocates the whole game — not just its identity file.
+        // A multi-disc PS1 set is a per-game subfolder plus a root .m3u.
+        std::vector<std::string> sources;
+        std::string disc_base = StripDiscSuffix(safe_name);
+        bool is_multi = false;
+        {
+            std::string lower_name = safe_name;
+            std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+            bool ends_m3u = lower_name.size() >= 4 &&
+                            lower_name.compare(lower_name.size() - 4, 4, ".m3u") == 0;
+            bool has_disc_marker = lower_name.find("(disc") != std::string::npos ||
+                                   lower_name.find("(disk") != std::string::npos;
+            is_multi = (ends_m3u || has_disc_marker) && !disc_base.empty();
+        }
+
+        if (is_multi) {
+            std::string root = ConfigManager::Instance().GetRomPath(resolved_slug);
+            std::string subdir = root + disc_base;
+            struct stat sb;
+            if (stat(subdir.c_str(), &sb) == 0) {
+                sources.push_back(subdir);
+            }
+            DIR* dir = opendir(root.c_str());
+            if (dir) {
+                struct dirent* ent;
+                while ((ent = readdir(dir)) != NULL) {
+                    std::string cand = ent->d_name;
+                    if (cand == "." || cand == "..") continue;
+                    if (StripDiscSuffix(cand) == disc_base) {
+                        sources.push_back(root + cand);
+                    }
+                }
+                closedir(dir);
+            }
+        } else {
+            sources.push_back(ResolveGameInstallPath(resolved_slug, safe_name));
+        }
+
+        if (sources.empty()) return 1;
+
+        // The installed-index identity is the .m3u for a multi-disc set, the
+        // single file otherwise. Its new location is what the index must record.
+        std::string identity_source = is_multi
+            ? ResolveGameInstallPath(resolved_slug, safe_name)
+            : sources.front();
+        std::string identity_base = identity_source.substr(identity_source.find_last_of('/') + 1);
+        std::string new_identity = NormalizePath(dest + identity_base);
+
+        for (const auto& src : sources) {
+            struct stat sb;
+            if (stat(src.c_str(), &sb) != 0) continue; // already gone
+
+            std::string base = src.substr(src.find_last_of('/') + 1);
+            if (base.empty()) continue;
+            std::string target = NormalizePath(dest + base);
+
+            if (NormalizePath(src) == target) continue; // already there
+
+            struct stat tb;
+            if (stat(target.c_str(), &tb) == 0) {
+                std::cerr << "[MOVE] target exists " << target << std::endl;
+                return 2;
+            }
+            if (rename(src.c_str(), target.c_str()) != 0) {
+                std::cerr << "[MOVE] rename failed " << src << " -> " << target << std::endl;
+                return 1;
+            }
+            std::cout << "[MOVE] renamed " << src << " -> " << target << std::endl;
+        }
+
+        // Rebase the installed-index entry onto the moved file so it still
+        // reads as installed and points at the real location.
+        {
+            std::lock_guard<std::mutex> lock(index_mutex);
+            std::string key = resolved_slug + "|" + safe_name;
+            auto it = installed_index.find(key);
+            if (it != installed_index.end()) {
+                it->second.install_path = new_identity;
+            }
+        }
+        InvalidateInstallCache();
+        SaveInstalledIndex();
+        std::cout << "[MOVE] moved_installed path=" << new_identity << std::endl;
+        return 0;
+    }
+
     std::string DownloadManager::InstallIdentityFilename(const std::string& platform_slug,
                                                          const std::vector<RomFileEntry>& files,
                                                          const std::string& fallback) {
